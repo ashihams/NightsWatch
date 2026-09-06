@@ -30,14 +30,17 @@ export async function initObservability(): Promise<boolean> {
   const endpoint = (process.env.NEATLOGS_ENDPOINT || "").trim();
 
   try {
+    // Workflow name describes this entrypoint (planner run), not the repo name.
+    const workflowName =
+      process.env.NEATLOGS_WORKFLOW_NAME || "support-agent-planner";
     await init({
       apiKey,
-      workflowName: process.env.NEATLOGS_WORKFLOW_NAME || "nights-watch-agent",
+      workflowName,
       ...(endpoint ? { endpoint } : {}),
     });
     tracingEnabled = true;
     console.log(
-      `[neatlogs] init ok — workflow=${process.env.NEATLOGS_WORKFLOW_NAME || "nights-watch-agent"} endpoint=${endpoint || "https://ingest.neatlogs.com"}`,
+      `[neatlogs] init ok — workflow=${workflowName} endpoint=${endpoint || "https://ingest.neatlogs.com"}`,
     );
     return true;
   } catch (err) {
