@@ -1,0 +1,13 @@
+{
+  "name": "nights-watch-ao",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Nights Watch — agent that learns third-party tools over repeated runs",
+  "scripts": {
+    "tools": "node tools/mock-server/index.js",
+    "mock-server": "node tools/mock-server/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
