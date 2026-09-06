@@ -1,0 +1,17 @@
+{
+  "description": "Fixed demo trajectory prompts for npm run replay:demo (Step 9). seen_a/seen_b teach resolve-customer_id; unseen benefits via shared-factor lesson injection.",
+  "scenarios": [
+    {
+      "label": "seen_a",
+      "task": "Find orders for Jordan Lee and open a support ticket about late shipment"
+    },
+    {
+      "label": "seen_b",
+      "task": "List the orders for Jordan Lee and open a support ticket about delayed shipment"
+    },
+    {
+      "label": "unseen",
+      "task": "Look up purchases belonging to Morgan Blake and file a support ticket for a delayed delivery"
+    }
+  ]
+}

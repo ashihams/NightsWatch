@@ -1,0 +1,184 @@
+:root {
+  --bg: #f7f5f0;
+  --ink: #1a1a1a;
+  --muted: #5c5c5c;
+  --line: #cfc9bc;
+  --ok: #1b6b3a;
+  --bad: #8b1e1e;
+  --pending: #6b5a1b;
+  --panel: #fffdf8;
+  --mono: "Cascadia Mono", "Consolas", "Menlo", monospace;
+  --sans: "Segoe UI", "Helvetica Neue", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 1.5rem 1.75rem 3rem;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.45;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 1.75rem;
+  letter-spacing: -0.02em;
+}
+
+.sub {
+  margin: 0.35rem 0 1.5rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.status {
+  margin-left: 0.75rem;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+main {
+  display: grid;
+  gap: 1.75rem;
+  max-width: 1100px;
+}
+
+section h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.2rem;
+}
+
+.hint {
+  margin: 0 0 0.75rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+}
+
+.empty {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.empty code {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  background: #efeae0;
+  padding: 0.1rem 0.35rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.45rem 0.55rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+th {
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+td.mono,
+.mono {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
+.badge {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 0.12rem 0.4rem;
+  border: 1px solid var(--line);
+}
+
+.badge.ok {
+  color: var(--ok);
+  border-color: #9bc5a8;
+  background: #e8f5ec;
+}
+
+.badge.bad {
+  color: var(--bad);
+  border-color: #d4a0a0;
+  background: #f8ecec;
+}
+
+.badge.pending {
+  color: var(--pending);
+  border-color: #d4c58a;
+  background: #f7f1dc;
+}
+
+.lesson {
+  border-top: 1px solid var(--line);
+  padding: 0.85rem 0;
+}
+
+.lesson:first-child {
+  border-top: none;
+  padding-top: 0.2rem;
+}
+
+.lesson h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.meta {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0.25rem 0;
+}
+
+.factors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.4rem 0 0;
+}
+
+.factor {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  padding: 0.1rem 0.35rem;
+  background: #efeae0;
+  border: 1px solid var(--line);
+}
+
+.group-title {
+  margin: 1rem 0 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.group-title:first-child {
+  margin-top: 0;
+}
