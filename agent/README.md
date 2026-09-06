@@ -1,4 +1,4 @@
-# Agent runtime (Steps 2–8)
+# Agent runtime (Steps 2–9)
 
 Minimal Node/TypeScript planner that calls the mock CRM webhooks from `tools/`, with Neatlogs OpenTelemetry tracing, SQLite **working memory**, SQLite **episodic vector memory**, a **deterministic post-run analyzer**, a **reflection LLM** (TensorMux / offline fallback), **Neo4j semantic memory** with an evidence gate, and **strategy injection** of usable lessons into new runs.
 
@@ -87,6 +87,28 @@ npm run strategy:prove
 # → naive baseline on unseen wording (injection off): list_orders first / misses
 # → injected unseen wording: search_customers first, fewer failed list_orders
 ```
+
+## Demo replay trajectory (Step 9)
+
+Single spine script: `scripts/replay-demo.ts` → `npm run replay:demo`.
+
+**Precondition:** `npm run tools` on `:5678`.
+
+Committed prompts: `scripts/scenarios/replay-demo.json` (`seen_a`, `seen_b`, `unseen`). Each run goes through `runOnePlanner` (no reimplemented loop). Metrics are pulled from working memory / episodic rows / analyzer / reflection / semantic lesson store.
+
+```bash
+npm run tools          # terminal 1
+npm run replay:demo    # terminal 2
+```
+
+Per-run row: `run_id`, label, success, `tool_call_count`, `failed_tool_calls`, `latency_ms`, `tokens`, `lessons_retrieved`, `lessons_promoted`. After all three, prints a comparison table.
+
+**Exit assertion (non-zero if unmet):** at least one of
+- (A) `unseen.failed_tool_calls < seen_a.failed_tool_calls`
+- (B) unseen task success and seen_a not successful (scoped `list_orders`, no unscoped misses)
+- (C) `unseen.lessons_retrieved > 0` while `seen_a.lessons_retrieved === 0`
+
+Demo stores: `./data/replay-demo/` (gitignored under `data/`).
 
 ## Reflection + semantic memory (Step 7)
 
@@ -239,6 +261,8 @@ Without usable injected lessons, the offline planner **calls `list_orders` befor
 | `src/factors.ts` | Documented factor vocabulary + deterministic extractor |
 | `src/strategy.ts` | Usable-lesson retrieval (direct / shared-factor) + prompt helpers |
 | `src/proveStrategy.ts` | `npm run strategy:prove` — naive vs injected unseen task |
+| `../scripts/replay-demo.ts` | `npm run replay:demo` — seen/unseen trajectory capture (Step 9) |
+| `../scripts/scenarios/replay-demo.json` | Fixed demo prompts (`seen_a` / `seen_b` / `unseen`) |
 | `src/analyzer.ts` | Pure `analyzeRun` |
 | `src/analyzeCompletedRun.ts` | Neatlogs-or-working-memory loader → `analyzeRun` |
 | `src/reflection.ts` | TensorMux / offline candidate lesson |

@@ -14,7 +14,8 @@
     "reflection:prove": "tsx agent/src/proveReflection.ts",
     "strategy:prove": "tsx agent/src/proveStrategy.ts",
     "memory:lessons": "tsx agent/src/listLessons.ts",
-    "neo4j:lessons": "tsx agent/src/listLessons.ts"
+    "neo4j:lessons": "tsx agent/src/listLessons.ts",
+    "replay:demo": "tsx scripts/replay-demo.ts"
   },
   "engines": {
     "node": ">=22.5"
