@@ -3,6 +3,8 @@
  * Logs every call (name, args, status, latency) to stdout.
  */
 
+import { withSpan } from "./observability.js";
+
 export const TOOL_NAMES = [
   "search_customers",
   "get_customer",
@@ -30,52 +32,76 @@ export async function callTool(
   name: ToolName,
   args: Record<string, unknown> = {},
 ): Promise<ToolCallResult> {
-  const url = `${toolsBaseUrl()}/webhook/${name}`;
-  const started = Date.now();
-  let status = 0;
-  let body: unknown = null;
-  let ok = false;
+  // Pass args into the span wrapper so Neatlogs captureInput is non-empty.
+  return withSpan(
+    { kind: "TOOL", name: `tool.${name}`, toolName: name },
+    async (toolArgs) => {
+      const url = `${toolsBaseUrl()}/webhook/${name}`;
+      const started = Date.now();
+      let status = 0;
+      let body: unknown = null;
+      let ok = false;
 
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(args),
-    });
-    status = res.status;
-    const text = await res.text();
-    try {
-      body = text ? JSON.parse(text) : null;
-    } catch {
-      body = { raw: text };
-    }
-    ok = res.ok && !(body && typeof body === "object" && (body as { ok?: boolean }).ok === false);
-  } catch (err) {
-    status = 0;
-    ok = false;
-    body = {
-      ok: false,
-      error: "transport_error",
-      message: err instanceof Error ? err.message : String(err),
-    };
-  }
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(toolArgs),
+        });
+        status = res.status;
+        const text = await res.text();
+        try {
+          body = text ? JSON.parse(text) : null;
+        } catch {
+          body = { raw: text };
+        }
+        // Unscoped / teaching-miss responses are HTTP 200 but not usable — treat as not-ok
+        // so working-memory logs and the analyzer see the intentional list_orders miss.
+        const unscopedMiss =
+          body &&
+          typeof body === "object" &&
+          ((body as { unscoped?: boolean }).unscoped === true ||
+            (body as { error?: string }).error === "missing_customer_id");
+        ok =
+          res.ok &&
+          !unscopedMiss &&
+          !(body && typeof body === "object" && (body as { ok?: boolean }).ok === false);
+      } catch (err) {
+        status = 0;
+        ok = false;
+        body = {
+          ok: false,
+          error: "transport_error",
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
 
-  const latencyMs = Date.now() - started;
-  const result: ToolCallResult = { name, args, status, ok, latencyMs, body };
+      const latencyMs = Date.now() - started;
+      const result: ToolCallResult = {
+        name,
+        args: toolArgs,
+        status,
+        ok,
+        latencyMs,
+        body,
+      };
 
-  // Structured stdout log for demos / later AO session capture
-  console.log(
-    JSON.stringify({
-      type: "tool_call",
-      name: result.name,
-      args: result.args,
-      status: result.status,
-      ok: result.ok,
-      latency_ms: result.latencyMs,
-    }),
+      // Structured stdout log for demos / later AO session capture
+      console.log(
+        JSON.stringify({
+          type: "tool_call",
+          name: result.name,
+          args: result.args,
+          status: result.status,
+          ok: result.ok,
+          latency_ms: result.latencyMs,
+        }),
+      );
+
+      return result;
+    },
+    args,
   );
-
-  return result;
 }
 
 /** OpenAI-style function schemas (intentionally light — naive agent won't see deep deps). */

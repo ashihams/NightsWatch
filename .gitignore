@@ -1,6 +1,5 @@
 node_modules/
 .venv/
-infra/tensormux/tensormux_requests.jsonl
 .env
 .env.*
 !.env.example
@@ -9,3 +8,4 @@ infra/tensormux/tensormux_requests.jsonl
 .ao/
 dist/
 data/
+infra/tensormux/tensormux_requests.jsonl

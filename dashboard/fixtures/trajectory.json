@@ -1,0 +1,72 @@
+{
+  "type": "replay_trajectory",
+  "updated_at": "2026-09-06T14:50:00.000Z",
+  "note": "Bundled snapshot for Vercel demo gallery (live RUN DEMO is local-only).",
+  "rows": [
+    {
+      "run_id": "demo-seen-a",
+      "label": "seen_a",
+      "success": false,
+      "tool_call_count": 4,
+      "failed_tool_calls": 1,
+      "failed_list_orders": 1,
+      "first_tool": "list_orders",
+      "tool_sequence": [
+        "list_orders",
+        "search_customers",
+        "list_orders",
+        "create_ticket"
+      ],
+      "latency_ms": 4543,
+      "tokens": 0,
+      "lessons_retrieved": 0,
+      "lessons_promoted": [],
+      "retrieval_path": null,
+      "analyzer_flagged": true,
+      "reflection_status": "candidate"
+    },
+    {
+      "run_id": "demo-seen-b",
+      "label": "seen_b",
+      "success": false,
+      "tool_call_count": 4,
+      "failed_tool_calls": 1,
+      "failed_list_orders": 1,
+      "first_tool": "list_orders",
+      "tool_sequence": [
+        "list_orders",
+        "search_customers",
+        "list_orders",
+        "create_ticket"
+      ],
+      "latency_ms": 606,
+      "tokens": 0,
+      "lessons_retrieved": 0,
+      "lessons_promoted": ["lesson_resolve_customer_id"],
+      "retrieval_path": null,
+      "analyzer_flagged": true,
+      "reflection_status": "promoted"
+    },
+    {
+      "run_id": "demo-unseen",
+      "label": "unseen",
+      "success": true,
+      "tool_call_count": 3,
+      "failed_tool_calls": 0,
+      "failed_list_orders": 0,
+      "first_tool": "search_customers",
+      "tool_sequence": [
+        "search_customers",
+        "list_orders",
+        "create_ticket"
+      ],
+      "latency_ms": 402,
+      "tokens": 0,
+      "lessons_retrieved": 1,
+      "lessons_promoted": [],
+      "retrieval_path": "shared_factor",
+      "analyzer_flagged": true,
+      "reflection_status": "candidate"
+    }
+  ]
+}

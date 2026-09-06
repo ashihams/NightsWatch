@@ -1,19 +1,37 @@
-{
+﻿{
   "name": "nights-watch-ao",
   "version": "0.1.0",
   "private": true,
-  "description": "Nights Watch — agent that learns third-party tools over repeated runs",
+  "description": "Loop — agent that learns third-party tools over repeated runs",
   "scripts": {
     "tools": "node tools/mock-server/index.js",
     "mock-server": "node tools/mock-server/index.js",
     "agent": "tsx agent/src/index.ts",
-    "agent:build": "tsc -p agent/tsconfig.json"
+    "agent:build": "tsc -p agent/tsconfig.json",
+    "working:list": "tsx agent/src/listWorking.ts",
+    "episodic:list": "tsx agent/src/listEpisodic.ts",
+    "episodic:reembed": "tsx scripts/reembed-episodes.ts",
+    "analyzer:prove": "tsx agent/src/proveAnalyzer.ts",
+    "reflection:prove": "tsx agent/src/proveReflection.ts",
+    "strategy:prove": "tsx agent/src/proveStrategy.ts",
+    "memory:lessons": "tsx agent/src/listLessons.ts",
+    "neo4j:lessons": "tsx agent/src/listLessons.ts",
+    "neo4j:probe": "tsx scripts/probe-neo4j.ts",
+    "replay:demo": "tsx scripts/replay-demo.ts",
+    "dashboard": "tsx dashboard/server.ts",
+    "dev:dashboard": "tsx dashboard/server.ts",
+    "n8n:up": "docker compose -f infra/n8n/docker-compose.yml up -d",
+    "n8n:down": "docker compose -f infra/n8n/docker-compose.yml down",
+    "n8n:import": "powershell -NoProfile -ExecutionPolicy Bypass -File infra/n8n/import-workflows.ps1"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.5"
   },
   "dependencies": {
+    "@vercel/node": "^5.3.24",
     "dotenv": "^16.4.7",
+    "neatlogs": "^1.1.19",
+    "neo4j-driver": "^5.28.3",
     "openai": "^4.86.2"
   },
   "devDependencies": {

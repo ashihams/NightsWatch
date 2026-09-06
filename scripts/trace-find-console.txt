@@ -1,0 +1,82 @@
+﻿node.exe : npm warn Unknown env config "devdir". This will stop working in the next major version of npm.
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn Unknow...version of npm.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+{
+  "who": {
+    "project_id": "b43cd8b5-128c-49ff-a525-4c68326a8fa5",
+    "project_name": "loop",
+    "org_id": "3e475bff-5880-45d5-a79f-d9d4c4ff09a7",
+    "project_repo": "",
+    "is_archived": false,
+    "tier": "free"
+  },
+  "runId": "df9be496-0c80-42a2-b421-6e8052423a5d",
+  "searches": {
+    "12345": {
+      "total": 0,
+      "hits": []
+    },
+    "df9be496-0c80-42a2-b421-6e8052423a5d": {
+      "total": 0,
+      "hits": []
+    },
+    "loop.run_id df9be496-0c80-42a2-b421-6e8052423a5d": {
+      "total": 0,
+      "hits": []
+    },
+    "nights_watch.run_id df9be496-0c80-42a2-b421-6e8052423a5d": {
+      "total": 0,
+      "hits": []
+    },
+    "loop_eval": {
+      "total": 0,
+      "hits": []
+    },
+    "support-agent-planner": {
+      "total": 7,
+      "hits": [
+        {
+          "trace_id": "81963db26f358b235ac16869958b9ca8",
+          "name": "support-agent-planner",
+          "snippet": "{\"trace_id\":\"81963db26f358b235ac16869958b9ca8\",\"score\":1,\"workflow_name\":\"support-agent-planner\",\"start_ts\":\"2026-09-06 11:13:25.956\",\"total_duration\":639,\"span_count\":4,\"trace_input\":\"\",\"trace_output"
+        },
+        {
+          "trace_id": "8436a25795de213b2a64ae77b5f04970",
+          "name": "support-agent-planner",
+          "snippet": "{\"trace_id\":\"8436a25795de213b2a64ae77b5f04970\",\"score\":1,\"workflow_name\":\"support-agent-planner\",\"start_ts\":\"2026-09-06 11:16:21.382\",\"total_duration\":631,\"span_count\":4,\"trace_input\":\"\",\"trace_output"
+        },
+        {
+          "trace_id": "caa7d61765b3e2f79c4a81bea6803a1e",
+          "name": "support-agent-planner",
+          "snippet": "{\"trace_id\":\"caa7d61765b3e2f79c4a81bea6803a1e\",\"score\":1,\"workflow_name\":\"support-agent-planner\",\"start_ts\":\"2026-09-06 11:14:10.649\",\"total_duration\":635,\"span_count\":4,\"trace_input\":\"\",\"trace_output"
+        },
+        {
+          "trace_id": "d31b276b6c888b11d0f854de99a4224b",
+          "name": "runOnePlanner",
+          "snippet": "{\"trace_id\":\"d31b276b6c888b11d0f854de99a4224b\",\"score\":0.45760845448965554,\"workflow_name\":\"runOnePlanner\",\"start_ts\":\"2026-09-06 10:43:53.145\",\"total_duration\":10674,\"span_count\":8,\"trace_input\":\"\",\""
+        },
+        {
+          "trace_id": "6da64fe50361e6933bce4caa0d00fa6b",
+          "snippet": "{\"trace_id\":\"6da64fe50361e6933bce4caa0d00fa6b\",\"score\":0.4483107405282003,\"workflow_name\":\"\",\"start_ts\":\"2026-09-06 11:07:54.620\",\"total_duration\":2154,\"span_count\":2,\"trace_input\":\"\",\"trace_output\":\""
+        },
+        {
+          "trace_id": "ab0ab2412fd5b62682cd680c343a7732",
+          "snippet": "{\"trace_id\":\"ab0ab2412fd5b62682cd680c343a7732\",\"score\":0.4474950915331414,\"workflow_name\":\"\",\"start_ts\":\"2026-09-06 11:13:46.974\",\"total_duration\":2228,\"span_count\":2,\"trace_input\":\"\",\"trace_output\":\""
+        },
+        {
+          "trace_id": "bd6de6fb88c01c72866ddf67fd7ed7e7",
+          "snippet": "{\"trace_id\":\"bd6de6fb88c01c72866ddf67fd7ed7e7\",\"score\":0.4376225090917214,\"workflow_name\":\"\",\"start_ts\":\"2026-09-06 11:16:22.038\",\"total_duration\":2259,\"span_count\":2,\"trace_input\":\"\",\"trace_output\":\""
+        }
+      ]
+    },
+    "runOnePlanner": {
+      "total": 0,
+      "hits": []
+    }
+  },
+  "checked_at": "2026-09-06T12:20:28.833Z"
+}

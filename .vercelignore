@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+.vercel
+data/
+node_modules/
+*.sqlite
+scripts/last-agent-run.txt
+scripts/trace-*.json
+scripts/trace-*.txt
