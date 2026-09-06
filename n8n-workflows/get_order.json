@@ -1,5 +1,5 @@
 {
-  "name": "NW - get_order",
+  "name": "Loop - get_order",
   "nodes": [
     {
       "parameters": {
@@ -12,7 +12,10 @@
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [0, 0],
+      "position": [
+        0,
+        0
+      ],
       "webhookId": "nw-get-order"
     },
     {
@@ -23,7 +26,10 @@
       "name": "Handle",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [260, 0]
+      "position": [
+        260,
+        0
+      ]
     },
     {
       "parameters": {
@@ -37,17 +43,39 @@
       "name": "Respond",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
-      "position": [520, 0]
+      "position": [
+        520,
+        0
+      ]
     }
   ],
   "connections": {
     "Webhook": {
-      "main": [[{ "node": "Handle", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Handle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Handle": {
-      "main": [[{ "node": "Respond", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
-  "settings": { "executionOrder": "v1" },
-  "pinData": {}
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "active": false
 }
