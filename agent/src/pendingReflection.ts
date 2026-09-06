@@ -9,7 +9,7 @@ import { resolve, join } from "node:path";
 import type { AnalyzeRunResult } from "./analyzer.js";
 
 export type PendingReflectionRecord = {
-  status: "pending";
+  status: "pending" | "reflected";
   run_id: string;
   task: string;
   created_at: string;
@@ -19,6 +19,10 @@ export type PendingReflectionRecord = {
   evidence: Record<string, unknown>;
   mode?: string;
   final_message?: string;
+  reflected_at?: string;
+  lesson_id?: string;
+  evidence_count?: number;
+  usable?: boolean;
 };
 
 function pendingDir(): string {
@@ -87,4 +91,25 @@ export function readPendingReflection(
   } catch {
     return null;
   }
+}
+
+/** Mark a pending_reflection file as reflected after Step 7 completes. */
+export function markPendingReflectionDone(params: {
+  runId: string;
+  lessonId: string;
+  evidenceCount: number;
+  usable: boolean;
+}): void {
+  const existing = readPendingReflection(params.runId);
+  if (!existing) return;
+  const updated: PendingReflectionRecord = {
+    ...existing,
+    status: "reflected",
+    reflected_at: new Date().toISOString(),
+    lesson_id: params.lessonId,
+    evidence_count: params.evidenceCount,
+    usable: params.usable,
+  };
+  const path = join(pendingDir(), `${params.runId}.json`);
+  writeFileSync(path, `${JSON.stringify(updated, null, 2)}\n`, "utf8");
 }

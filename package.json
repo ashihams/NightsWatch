@@ -10,7 +10,10 @@
     "agent:build": "tsc -p agent/tsconfig.json",
     "working:list": "tsx agent/src/listWorking.ts",
     "episodic:list": "tsx agent/src/listEpisodic.ts",
-    "analyzer:prove": "tsx agent/src/proveAnalyzer.ts"
+    "analyzer:prove": "tsx agent/src/proveAnalyzer.ts",
+    "reflection:prove": "tsx agent/src/proveReflection.ts",
+    "memory:lessons": "tsx agent/src/listLessons.ts",
+    "neo4j:lessons": "tsx agent/src/listLessons.ts"
   },
   "engines": {
     "node": ">=22.5"
@@ -18,6 +21,7 @@
   "dependencies": {
     "dotenv": "^16.4.7",
     "neatlogs": "^1.1.19",
+    "neo4j-driver": "^5.28.3",
     "openai": "^4.86.2"
   },
   "devDependencies": {

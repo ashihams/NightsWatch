@@ -6,7 +6,7 @@
  *
  * Working memory (SQLite): one row per run — start → append tool calls → complete|failed.
  * Episodic memory (SQLite vectors): retrieve soft context at start; write episode on end.
- * Post-run: deterministic analyzer (no reflection LLM); pending_reflection if flagged.
+ * Post-run: deterministic analyzer → reflection LLM (if flagged) → semantic memory evidence gate.
  */
 
 import {
@@ -17,12 +17,13 @@ import {
   type LlmMessage,
 } from "./llm.js";
 import { offlinePlanNext } from "./offlinePlanner.js";
-import { flushObservability, withPlannerWorkflow } from "./observability.js";
+import { withSpan } from "./observability.js";
 import { TOOL_NAMES, callTool, type ToolCallResult, type ToolName } from "./tools.js";
 import {
   appendToolCall,
   finishWorkingRun,
   getInjectedContext,
+  getWorkingRun,
   hasSemanticLessons,
   setInjectedContext,
   startWorkingRun,
@@ -34,8 +35,16 @@ import {
   writeEpisode,
 } from "./episodicMemory.js";
 import { analyzeCompletedRun } from "./analyzeCompletedRun.js";
-import { writePendingReflection } from "./pendingReflection.js";
-import type { AnalyzeRunResult } from "./analyzer.js";
+import {
+  markPendingReflectionDone,
+  writePendingReflection,
+} from "./pendingReflection.js";
+import { reflectOnFlaggedRun } from "./reflection.js";
+import {
+  storeCandidateLesson,
+  type StoreLessonResult,
+} from "./semanticMemory.js";
+import type { AnalyzeRunResult, NormalizedToolCall } from "./analyzer.js";
 
 export type PlannerRunResult = {
   task: string;
@@ -46,6 +55,7 @@ export type PlannerRunResult = {
   finalMessage: string;
   analysis?: AnalyzeRunResult;
   analysisSource?: "neatlogs" | "working_memory";
+  reflection?: StoreLessonResult;
 };
 
 function isToolName(name: string): name is ToolName {
@@ -140,7 +150,7 @@ async function persistEpisode(params: {
 
 /**
  * Always run the deterministic analyzer after a run ends.
- * If flagged, write pending_reflection for Step 7 — do NOT call reflection LLM.
+ * If flagged: reflect (TensorMux or offline) → store candidate / promote via evidence gate.
  */
 async function runPostAnalyzer(params: {
   runId: string;
@@ -153,8 +163,9 @@ async function runPostAnalyzer(params: {
 }): Promise<{
   analysis: AnalyzeRunResult;
   source: "neatlogs" | "working_memory";
+  reflection?: StoreLessonResult;
 }> {
-  const { analysis, source } = await analyzeCompletedRun({
+  const { analysis, source, input } = await analyzeCompletedRun({
     runId: params.runId,
     task: params.task,
     toolCalls: params.toolCalls,
@@ -173,69 +184,149 @@ async function runPostAnalyzer(params: {
     }),
   );
 
-  if (analysis.flagged) {
-    const path = writePendingReflection({
+  if (!analysis.flagged) {
+    return { analysis, source };
+  }
+
+  console.log(
+    JSON.stringify({
+      type: "reflection_gate",
+      run_id: params.runId,
+      stage: "flagged",
+      triggers: analysis.triggers,
+    }),
+  );
+
+  const pendingPath = writePendingReflection({
+    runId: params.runId,
+    task: params.task,
+    source,
+    analysis,
+    mode: params.mode,
+    finalMessage: params.finalMessage,
+  });
+
+  let toolCalls: NormalizedToolCall[] = input.toolCalls;
+  if (toolCalls.length === 0) {
+    toolCalls = params.toolCalls.map((c) => ({
+      name: c.name,
+      args: c.args,
+      status: c.status,
+      ok: c.ok,
+      latencyMs: c.latencyMs,
+      body: c.body,
+    }));
+  }
+
+  let reflection: StoreLessonResult | undefined;
+  try {
+    const candidate = await reflectOnFlaggedRun({
       runId: params.runId,
       task: params.task,
-      source,
       analysis,
-      mode: params.mode,
-      finalMessage: params.finalMessage,
+      toolCalls,
     });
+
+    console.log(
+      JSON.stringify({
+        type: "reflection_result",
+        run_id: params.runId,
+        stage: "reflected",
+        mode: candidate.mode,
+        tool: candidate.tool,
+        factors: candidate.factors,
+        lesson_id: candidate.lesson_id,
+        lesson_text: candidate.lesson_text,
+      }),
+    );
+
+    const working = getWorkingRun(params.runId);
+    reflection = await storeCandidateLesson({
+      run: {
+        id: params.runId,
+        task: params.task,
+        started_at: working?.started_at || new Date().toISOString(),
+        success: params.success,
+        tool_calls: params.toolCalls.length,
+        tokens: 0,
+        latency_ms: params.latencyMs,
+      },
+      candidate,
+    });
+
+    const status = reflection.lesson.usable ? "promoted" : "candidate";
+    console.log(
+      JSON.stringify({
+        type: "semantic_memory_upsert",
+        run_id: params.runId,
+        stage: status,
+        lesson_id: reflection.lesson.id,
+        evidence_count: reflection.lesson.evidence_count,
+        confidence: reflection.lesson.confidence,
+        usable: reflection.lesson.usable,
+        promoted_this_run: reflection.promoted,
+        backend: reflection.backend,
+        supporting_run_ids: reflection.lesson.supporting_run_ids,
+        pending_path: pendingPath,
+      }),
+    );
+
+    markPendingReflectionDone({
+      runId: params.runId,
+      lessonId: reflection.lesson.id,
+      evidenceCount: reflection.lesson.evidence_count,
+      usable: reflection.lesson.usable,
+    });
+  } catch (err) {
+    console.warn(
+      "[reflection] failed — pending_reflection kept; agent continues:",
+      err instanceof Error ? err.message : err,
+    );
     console.log(
       JSON.stringify({
         type: "pending_reflection",
         run_id: params.runId,
-        path,
+        path: pendingPath,
         triggers: analysis.triggers,
-        note: "reflection LLM deferred to Step 7",
+        note: "reflection failed; record left pending",
       }),
     );
   }
 
-  return { analysis, source };
+  return { analysis, source, reflection };
 }
 
 /**
  * Run a single planner loop for `task`.
  * Routes LLM planning through TensorMux when configured; otherwise offline naive planner.
  *
- * Trace lifecycle: WORKFLOW root ends → flush → MCP analyzer read-back.
- * Analyzer must NOT run inside the open WORKFLOW span.
+ * This is the AO-session entrypoint — wrap later as an AO session; keep the boundary here.
  */
 export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
-  const mode = tensormuxConfigured() ? "tensormux" : "offline";
-  const toolCalls: ToolCallResult[] = [];
-  const history: LlmMessage[] = [];
-  const limit = maxSteps();
-  const runStarted = Date.now();
-  const runId = startWorkingRun(task);
+  return withSpan({ kind: "AGENT", name: "runOnePlanner" }, async () => {
+    const mode = tensormuxConfigured() ? "tensormux" : "offline";
+    const toolCalls: ToolCallResult[] = [];
+    const history: LlmMessage[] = [];
+    const limit = maxSteps();
+    const runStarted = Date.now();
+    const runId = startWorkingRun(task);
 
-  console.log(
-    JSON.stringify({
-      type: "planner_start",
-      run_id: runId,
-      task,
-      mode,
-      max_steps: limit,
-    }),
-  );
+    console.log(
+      JSON.stringify({
+        type: "planner_start",
+        run_id: runId,
+        task,
+        mode,
+        max_steps: limit,
+      }),
+    );
 
-  type CoreResult = {
-    finalMessage: string;
-    runStatus: "complete" | "failed";
-    latencyMs: number;
-  };
+    await maybeInjectEpisodicContext(runId, task);
 
-  let core: CoreResult;
+    let finalMessage = "";
+    let runStatus: "complete" | "failed" = "complete";
 
-  try {
-    core = await withPlannerWorkflow({ runId, task, mode }, async () => {
-      await maybeInjectEpisodicContext(runId, task);
-
-      let finalMessage = "";
-      let runStatus: "complete" | "failed" = "complete";
-
+    try {
       for (let step = 0; step < limit; step++) {
         const action =
           mode === "tensormux"
@@ -286,101 +377,107 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
         latencyMs,
       });
 
-      return { finalMessage, runStatus, latencyMs };
-    });
-  } catch (err) {
-    finishWorkingRun(runId, "failed");
-    const latencyMs = Date.now() - runStarted;
-    try {
-      await persistEpisode({
-        runId,
-        task,
-        toolCalls,
-        success: false,
-        latencyMs,
-      });
-    } catch (persistErr) {
-      console.log(
-        JSON.stringify({
-          type: "episodic_write_error",
-          run_id: runId,
-          error:
-            persistErr instanceof Error
-              ? persistErr.message
-              : String(persistErr),
-        }),
-      );
-    }
-    await flushObservability();
-    try {
-      await runPostAnalyzer({
+      const {
+        analysis,
+        source: analysisSource,
+        reflection,
+      } = await runPostAnalyzer({
         runId,
         task,
         toolCalls,
         latencyMs,
-        success: false,
+        success: runStatus === "complete",
         mode,
-        finalMessage: err instanceof Error ? err.message : String(err),
+        finalMessage,
       });
-    } catch (analyzeErr) {
+
       console.log(
         JSON.stringify({
-          type: "analyzer_error",
+          type: "planner_done",
           run_id: runId,
-          error:
-            analyzeErr instanceof Error
-              ? analyzeErr.message
-              : String(analyzeErr),
+          mode,
+          status: runStatus,
+          steps: toolCalls.length,
+          final_message: finalMessage,
+          analyzer_flagged: analysis.flagged,
+          analyzer_triggers: analysis.triggers,
+          reflection_status: reflection
+            ? reflection.lesson.usable
+              ? "promoted"
+              : "candidate"
+            : analysis.flagged
+              ? "failed"
+              : "skipped",
+          lesson_evidence_count: reflection?.lesson.evidence_count,
         }),
       );
-    }
-    console.log(
-      JSON.stringify({
-        type: "planner_failed",
-        run_id: runId,
+
+      return {
+        task,
         mode,
+        runId,
         steps: toolCalls.length,
-        error: err instanceof Error ? err.message : String(err),
-      }),
-    );
-    throw err;
-  }
-
-  await flushObservability();
-
-  const { analysis, source: analysisSource } = await runPostAnalyzer({
-    runId,
-    task,
-    toolCalls,
-    latencyMs: core.latencyMs,
-    success: core.runStatus === "complete",
-    mode,
-    finalMessage: core.finalMessage,
+        toolCalls,
+        finalMessage,
+        analysis,
+        analysisSource,
+        reflection,
+      };
+    } catch (err) {
+      finishWorkingRun(runId, "failed");
+      const latencyMs = Date.now() - runStarted;
+      try {
+        await persistEpisode({
+          runId,
+          task,
+          toolCalls,
+          success: false,
+          latencyMs,
+        });
+      } catch (persistErr) {
+        console.log(
+          JSON.stringify({
+            type: "episodic_write_error",
+            run_id: runId,
+            error:
+              persistErr instanceof Error
+                ? persistErr.message
+                : String(persistErr),
+          }),
+        );
+      }
+      try {
+        await runPostAnalyzer({
+          runId,
+          task,
+          toolCalls,
+          latencyMs,
+          success: false,
+          mode,
+          finalMessage: err instanceof Error ? err.message : String(err),
+        });
+      } catch (analyzeErr) {
+        console.log(
+          JSON.stringify({
+            type: "analyzer_error",
+            run_id: runId,
+            error:
+              analyzeErr instanceof Error
+                ? analyzeErr.message
+                : String(analyzeErr),
+          }),
+        );
+      }
+      console.log(
+        JSON.stringify({
+          type: "planner_failed",
+          run_id: runId,
+          mode,
+          steps: toolCalls.length,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+      throw err;
+    }
   });
-
-  console.log(
-    JSON.stringify({
-      type: "planner_done",
-      run_id: runId,
-      mode,
-      status: core.runStatus,
-      steps: toolCalls.length,
-      final_message: core.finalMessage,
-      analyzer_flagged: analysis.flagged,
-      analyzer_triggers: analysis.triggers,
-      analyzer_source: analysisSource,
-    }),
-  );
-
-  return {
-    task,
-    mode,
-    runId,
-    steps: toolCalls.length,
-    toolCalls,
-    finalMessage: core.finalMessage,
-    analysis,
-    analysisSource,
-  };
 }
-
