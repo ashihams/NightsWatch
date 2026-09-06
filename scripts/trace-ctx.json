@@ -1,0 +1,23 @@
+{
+  "feb4191a": {
+    "total": 0,
+    "totalRelation": "eq",
+    "mode": "keyword",
+    "results": []
+  },
+  "loop:feb4191a": {
+    "total": 0,
+    "totalRelation": "eq",
+    "mode": "keyword",
+    "results": []
+  },
+  "482be802": {
+    "total": 0,
+    "totalRelation": "eq",
+    "mode": "keyword",
+    "results": []
+  },
+  "ctx": {
+    "error": "Trace not found: 482be802f1804ad6afd26ba028a7b8a5"
+  }
+}

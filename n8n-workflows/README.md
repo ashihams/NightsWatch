@@ -1,12 +1,13 @@
-# n8n workflows (Loop CRM)
+# n8n workflows (optional)
 
-Import these JSON files into n8n (**Workflows → Import from File**) or use the local Docker helper:
+Import these JSON files into n8n (**Workflows → Import from File**). Each exposes a POST webhook at `/webhook/<tool_name>` with the same contract as the local mock server.
 
-```powershell
-npm run n8n:up
-npm run n8n:import
+For local hackathon demos without n8n cloud, prefer:
+
+```bash
+npm run tools
 ```
 
-Each exposes `POST /webhook/<tool_name>` with the same contract as the mock server.
+See `../tools/README.md` for curl examples and the `customer_id` dependency.
 
-See `../infra/n8n/README.md` and `../tools/README.md`.
+The Code nodes here use a small in-memory seed (same IDs as the mock). Behavior is simplified vs the Node mock (less random latency/rate-limit noise); use the mock server when you need imperfect responses for agent learning.
