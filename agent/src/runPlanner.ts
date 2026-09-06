@@ -18,7 +18,7 @@ import {
   type LlmMessage,
 } from "./llm.js";
 import { offlinePlanNext } from "./offlinePlanner.js";
-import { withSpan } from "./observability.js";
+import { flushObservability, withPlannerWorkflow } from "./observability.js";
 import { TOOL_NAMES, callTool, type ToolCallResult, type ToolName } from "./tools.js";
 import {
   appendToolCall,
@@ -392,40 +392,50 @@ async function runPostAnalyzer(params: {
  * Run a single planner loop for `task`.
  * Routes LLM planning through TensorMux when configured; otherwise offline naive planner.
  *
+ * Trace lifecycle (Neatlogs docs): WORKFLOW root ends → flush → MCP search_traces
+ * for analyzer read-back. Analyzer must NOT run inside the open WORKFLOW span.
+ *
  * This is the AO-session entrypoint — wrap later as an AO session; keep the boundary here.
  */
 export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
-  // WORKFLOW root groups LLM + tool spans for one planner invocation
-  return withSpan({ kind: "WORKFLOW", name: "runOnePlanner" }, async () => {
-    const mode = tensormuxConfigured() ? "tensormux" : "offline";
-    const toolCalls: ToolCallResult[] = [];
-    const history: LlmMessage[] = [];
-    const limit = maxSteps();
-    const runStarted = Date.now();
-    const runId = startWorkingRun(task);
+  const mode = tensormuxConfigured() ? "tensormux" : "offline";
+  const toolCalls: ToolCallResult[] = [];
+  const history: LlmMessage[] = [];
+  const limit = maxSteps();
+  const runStarted = Date.now();
+  const runId = startWorkingRun(task);
 
-    console.log(
-      JSON.stringify({
-        type: "planner_start",
-        run_id: runId,
-        task,
-        mode,
-        max_steps: limit,
-      }),
-    );
+  console.log(
+    JSON.stringify({
+      type: "planner_start",
+      run_id: runId,
+      task,
+      mode,
+      max_steps: limit,
+    }),
+  );
 
-    // Semantic lessons first; episodic only when nothing strong was injected.
-    await maybeInjectStrategyLessons(runId, task);
-    await maybeInjectEpisodicContext(runId, task);
+  type CoreResult = {
+    finalMessage: string;
+    runStatus: "complete" | "failed";
+    latencyMs: number;
+  };
 
-    const injected = getInjectedContext(runId);
-    const semanticLessons = getInjectedSemanticLessons(injected);
-    const lessonBlock = formatLessonsForPrompt(semanticLessons);
+  let core: CoreResult;
 
-    let finalMessage = "";
-    let runStatus: "complete" | "failed" = "complete";
+  try {
+    core = await withPlannerWorkflow({ runId, task, mode }, async () => {
+      // Semantic lessons first; episodic only when nothing strong was injected.
+      await maybeInjectStrategyLessons(runId, task);
+      await maybeInjectEpisodicContext(runId, task);
 
-    try {
+      const injected = getInjectedContext(runId);
+      const semanticLessons = getInjectedSemanticLessons(injected);
+      const lessonBlock = formatLessonsForPrompt(semanticLessons);
+
+      let finalMessage = "";
+      let runStatus: "complete" | "failed" = "complete";
+
       for (let step = 0; step < limit; step++) {
         const action =
           mode === "tensormux"
@@ -476,107 +486,118 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
         latencyMs,
       });
 
-      const {
-        analysis,
-        source: analysisSource,
-        reflection,
-      } = await runPostAnalyzer({
+      return { finalMessage, runStatus, latencyMs };
+    });
+  } catch (err) {
+    finishWorkingRun(runId, "failed");
+    const latencyMs = Date.now() - runStarted;
+    try {
+      await persistEpisode({
+        runId,
+        task,
+        toolCalls,
+        success: false,
+        latencyMs,
+      });
+    } catch (persistErr) {
+      console.log(
+        JSON.stringify({
+          type: "episodic_write_error",
+          run_id: runId,
+          error:
+            persistErr instanceof Error
+              ? persistErr.message
+              : String(persistErr),
+        }),
+      );
+    }
+
+    // Still flush so partial spans are searchable
+    await flushObservability();
+
+    try {
+      await runPostAnalyzer({
         runId,
         task,
         toolCalls,
         latencyMs,
-        success: runStatus === "complete",
+        success: false,
         mode,
-        finalMessage,
+        finalMessage: err instanceof Error ? err.message : String(err),
       });
-
+    } catch (analyzeErr) {
       console.log(
         JSON.stringify({
-          type: "planner_done",
+          type: "analyzer_error",
           run_id: runId,
-          mode,
-          status: runStatus,
-          steps: toolCalls.length,
-          final_message: finalMessage,
-          analyzer_flagged: analysis.flagged,
-          analyzer_triggers: analysis.triggers,
-          reflection_status: reflection
-            ? reflection.lesson.usable
-              ? "promoted"
-              : "candidate"
-            : analysis.flagged
-              ? "failed"
-              : "skipped",
-          lesson_evidence_count: reflection?.lesson.evidence_count,
+          error:
+            analyzeErr instanceof Error
+              ? analyzeErr.message
+              : String(analyzeErr),
         }),
       );
-
-      return {
-        task,
-        mode,
-        runId,
-        steps: toolCalls.length,
-        toolCalls,
-        finalMessage,
-        analysis,
-        analysisSource,
-        reflection,
-      };
-    } catch (err) {
-      finishWorkingRun(runId, "failed");
-      const latencyMs = Date.now() - runStarted;
-      try {
-        await persistEpisode({
-          runId,
-          task,
-          toolCalls,
-          success: false,
-          latencyMs,
-        });
-      } catch (persistErr) {
-        console.log(
-          JSON.stringify({
-            type: "episodic_write_error",
-            run_id: runId,
-            error:
-              persistErr instanceof Error
-                ? persistErr.message
-                : String(persistErr),
-          }),
-        );
-      }
-      try {
-        await runPostAnalyzer({
-          runId,
-          task,
-          toolCalls,
-          latencyMs,
-          success: false,
-          mode,
-          finalMessage: err instanceof Error ? err.message : String(err),
-        });
-      } catch (analyzeErr) {
-        console.log(
-          JSON.stringify({
-            type: "analyzer_error",
-            run_id: runId,
-            error:
-              analyzeErr instanceof Error
-                ? analyzeErr.message
-                : String(analyzeErr),
-          }),
-        );
-      }
-      console.log(
-        JSON.stringify({
-          type: "planner_failed",
-          run_id: runId,
-          mode,
-          steps: toolCalls.length,
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      );
-      throw err;
     }
+    console.log(
+      JSON.stringify({
+        type: "planner_failed",
+        run_id: runId,
+        mode,
+        steps: toolCalls.length,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+    throw err;
+  }
+
+  // End WORKFLOW → export spans → MCP read-back (docs: flush before short-lived exit / read)
+  await flushObservability();
+
+  const {
+    analysis,
+    source: analysisSource,
+    reflection,
+  } = await runPostAnalyzer({
+    runId,
+    task,
+    toolCalls,
+    latencyMs: core.latencyMs,
+    success: core.runStatus === "complete",
+    mode,
+    finalMessage: core.finalMessage,
   });
+
+  console.log(
+    JSON.stringify({
+      type: "planner_done",
+      run_id: runId,
+      mode,
+      status: core.runStatus,
+      steps: toolCalls.length,
+      final_message: core.finalMessage,
+      analyzer_flagged: analysis.flagged,
+      analyzer_triggers: analysis.triggers,
+      analyzer_source: analysisSource,
+      reflection_status: reflection
+        ? reflection.lesson.usable
+          ? "promoted"
+          : "candidate"
+        : analysis.flagged
+          ? "failed"
+          : "skipped",
+      lesson_evidence_count: reflection?.lesson.evidence_count,
+    }),
+  );
+
+  return {
+    task,
+    mode,
+    runId,
+    steps: toolCalls.length,
+    toolCalls,
+    finalMessage: core.finalMessage,
+    analysis,
+    analysisSource,
+    reflection,
+  };
 }
+

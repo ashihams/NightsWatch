@@ -187,8 +187,10 @@ analyzeRun(input) → {
 
 ### Data paths (same triggers)
 
-1. **Neatlogs (preferred)** — when `NEATLOGS_API_KEY` is set, the loader calls the Neatlogs MCP session/trace API and maps TOOL spans into normalized tool calls.
+1. **Neatlogs (preferred)** — after the WORKFLOW span ends, `flushObservability()` exports OTLP spans, then the MCP client (`whoami` → `list_detections` → `search_traces` → `get_trace_context`, with `log_trace` fallback) loads TOOL spans. Fired detections / eval rules merge into `triggers` (e.g. `tool_failure`, `neatlogs_detection:*`). TensorMux `/tensormux/requests` samples are attached as evidence.
 2. **Working memory (fallback)** — if Neatlogs is unset or the read fails/empty, use `working_runs.tool_call_log`, then in-memory tool results.
+
+Stdout: `neatlogs_flush` → `analyzer_neatlogs_ok` (or `*_skip`) → `analyzer_source: neatlogs|working_memory`.
 
 ### Pending reflection
 
@@ -246,10 +248,12 @@ Init once in `src/observability.ts` at the start of `src/index.ts`.
 | `NEATLOGS_ENDPOINT` | Optional ingest base URL |
 | `NEATLOGS_MCP_URL` | Optional MCP URL for analyzer reads |
 | `NEATLOGS_WORKFLOW_NAME` | Optional workflow label (default `support-agent-planner`) |
+| `NEATLOGS_READ_WAIT_MS` | Post-flush MCP search poll budget (default `8000`) |
+| `NEATLOGS_READ_POLL_MS` | Poll interval (default `1500`) |
 
 **Missing key:** tracing skipped with a warning; agent continues.
 
-**With key:** AGENT / TOOL / LLM spans (planner + reflection via TensorMux `wrapOpenAI`).
+**With key + TensorMux:** one `WORKFLOW` root (`runOnePlanner`) stamped with `nights_watch.run_id` + TensorMux host/model; nested `AGENT` / `LLM` (via `wrapOpenAI` → TensorMux `/v1`) / `TOOL` spans. Analyzer flushes, then MCP-reads (or `log_trace` snapshot) before reflection. Enable detections in the Neatlogs dashboard to surface eval badges into analyzer triggers.
 
 ## TensorMux (LLM path)
 

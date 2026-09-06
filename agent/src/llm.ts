@@ -1,11 +1,14 @@
 /**
  * All LLM calls go through TensorMux (OpenAI-compatible).
  * When credentials are missing, callers should use the offline planner.
+ *
+ * Neatlogs wrapOpenAI records LLM spans; we also capture TensorMux response
+ * headers (x-request-id, x-tensormux-backend) for gateway↔trace correlation.
  */
 
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { maybeWrapOpenAI } from "./observability.js";
+import { maybeWrapOpenAI, withSpan } from "./observability.js";
 import { TOOL_DEFINITIONS } from "./tools.js";
 
 export type LlmMessage = ChatCompletionMessageParam;
@@ -13,6 +16,18 @@ export type LlmMessage = ChatCompletionMessageParam;
 export type PlannerAction =
   | { type: "tool"; name: string; args: Record<string, unknown> }
   | { type: "finish"; message: string };
+
+export type TensorMuxCallMeta = {
+  model: string;
+  request_id?: string;
+  backend?: string;
+};
+
+let lastTensorMuxMeta: TensorMuxCallMeta | null = null;
+
+export function getLastTensorMuxMeta(): TensorMuxCallMeta | null {
+  return lastTensorMuxMeta;
+}
 
 export function tensormuxConfigured(): boolean {
   const base = (process.env.TENSORMUX_BASE_URL || "").trim();
@@ -24,8 +39,10 @@ function client(): OpenAI {
   const raw = new OpenAI({
     apiKey: process.env.TENSORMUX_API_KEY!,
     baseURL: process.env.TENSORMUX_BASE_URL!,
+    defaultHeaders: {
+      "X-Nights-Watch-Client": "support-agent-planner",
+    },
   });
-  // wrapOpenAI emits LLM spans when Neatlogs is initialized
   return maybeWrapOpenAI(raw);
 }
 
@@ -43,44 +60,85 @@ export async function planNextStep(
   history: LlmMessage[],
   lessonBlock?: string,
 ): Promise<PlannerAction> {
-  const systemContent = lessonBlock?.trim()
-    ? `${SYSTEM}\n\n${lessonBlock.trim()}`
-    : SYSTEM;
-  const messages: LlmMessage[] = [
-    { role: "system", content: systemContent },
-    { role: "user", content: task },
-    ...history,
-  ];
+  return withSpan({ kind: "AGENT", name: "planNextStep" }, async () => {
+    const systemContent = lessonBlock?.trim()
+      ? `${SYSTEM}\n\n${lessonBlock.trim()}`
+      : SYSTEM;
+    const messages: LlmMessage[] = [
+      { role: "system", content: systemContent },
+      { role: "user", content: task },
+      ...history,
+    ];
 
-  const model = process.env.TENSORMUX_MODEL || "gpt-4o-mini";
-  const completion = await client().chat.completions.create({
-    model,
-    messages,
-    tools: TOOL_DEFINITIONS,
-    tool_choice: "auto",
-  });
+    const model = process.env.TENSORMUX_MODEL || "gpt-4o-mini";
 
-  const msg = completion.choices[0]?.message;
-  if (!msg) {
-    return { type: "finish", message: "Empty LLM response; stopping." };
-  }
+    // Note: neatlogs wrapOpenAI returns a plain Promise (not OpenAI APIPromise),
+    // so .withResponse() is unavailable — correlate via TensorMux /tensormux/requests.
+    const data = await client().chat.completions.create({
+      model,
+      messages,
+      tools: TOOL_DEFINITIONS,
+      tool_choice: "auto",
+    });
 
-  const toolCalls = msg.tool_calls;
-  if (toolCalls && toolCalls.length > 0) {
-    const call = toolCalls[0];
-    let args: Record<string, unknown> = {};
+    lastTensorMuxMeta = { model };
     try {
-      args = JSON.parse(call.function.arguments || "{}") as Record<string, unknown>;
+      const origin = new URL(
+        (process.env.TENSORMUX_BASE_URL || "").replace(/\/v1\/?$/, ""),
+      ).origin;
+      const res = await fetch(`${origin}/tensormux/requests`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      if (res.ok) {
+        const json = (await res.json()) as unknown;
+        const list = Array.isArray(json)
+          ? json
+          : Array.isArray((json as { requests?: unknown }).requests)
+            ? (json as { requests: unknown[] }).requests
+            : [];
+        const last = list[list.length - 1] as
+          | Record<string, unknown>
+          | undefined;
+        if (last) {
+          lastTensorMuxMeta = {
+            model,
+            request_id: String(last.request_id || last.id || "") || undefined,
+            backend: String(last.backend || "") || undefined,
+          };
+        }
+      }
     } catch {
-      args = {};
+      // optional enrichment
     }
-    return { type: "tool", name: call.function.name, args };
-  }
+    console.log(
+      JSON.stringify({ type: "tensormux_llm_call", ...lastTensorMuxMeta }),
+    );
 
-  return {
-    type: "finish",
-    message: (msg.content || "").trim() || "Done.",
-  };
+    const msg = data.choices[0]?.message;
+    if (!msg) {
+      return { type: "finish", message: "Empty LLM response; stopping." };
+    }
+
+    const toolCalls = msg.tool_calls;
+    if (toolCalls && toolCalls.length > 0) {
+      const call = toolCalls[0];
+      let args: Record<string, unknown> = {};
+      try {
+        args = JSON.parse(call.function.arguments || "{}") as Record<
+          string,
+          unknown
+        >;
+      } catch {
+        args = {};
+      }
+      return { type: "tool", name: call.function.name, args };
+    }
+
+    return {
+      type: "finish",
+      message: (msg.content || "").trim() || "Done.",
+    };
+  });
 }
 
 export function assistantToolStub(
