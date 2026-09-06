@@ -22,9 +22,16 @@ npm run agent
 # Deterministic analyzer proof (flagged naive vs clean)
 npm run analyzer:prove
 
+# Two-run lesson promotion (candidate → usable)
+npm run reflection:prove
+
+# Strategy injection: naive vs injected unseen task
+npm run strategy:prove
+
 # Inspect stores
 npm run working:list
 npm run episodic:list
+npm run memory:lessons
 ```
 
-See `tools/README.md` for webhook contracts and `agent/README.md` for the planner, AO entrypoint, Neatlogs, SQLite working/episodic memory, and the Step 6 post-run analyzer.
+See `tools/README.md` for webhook contracts and `agent/README.md` for the planner, AO entrypoint, Neatlogs, SQLite working/episodic memory, semantic lessons, and Step 8 strategy injection.

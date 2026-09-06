@@ -1,8 +1,6 @@
 /**
  * Build AnalyzeRunInput: prefer Neatlogs session/trace when NEATLOGS_* set;
  * fall back to working-memory tool_call_log + in-memory run summary.
- *
- * Merges Neatlogs eval detections into analyzer triggers when the MCP path hits.
  */
 
 import {
@@ -14,10 +12,7 @@ import {
   type PriorEpisodeSummary,
 } from "./analyzer.js";
 import { listEpisodes } from "./episodicMemory.js";
-import {
-  detectionNamesToTriggers,
-  tryLoadNeatlogsToolCalls,
-} from "./neatlogsSession.js";
+import { tryLoadNeatlogsToolCalls } from "./neatlogsSession.js";
 import { getWorkingRun } from "./workingMemory.js";
 import type { ToolCallResult } from "./tools.js";
 
@@ -52,7 +47,6 @@ export type PostRunAnalysis = {
 
 /**
  * Load tool-call evidence (Neatlogs preferred) and run the pure analyzer.
- * Caller must flush Neatlogs before this when tracing is enabled.
  */
 export async function analyzeCompletedRun(params: {
   runId: string;
@@ -66,16 +60,6 @@ export async function analyzeCompletedRun(params: {
   const neat = await tryLoadNeatlogsToolCalls({
     runId: params.runId,
     task: params.task,
-    toolCalls: params.toolCalls.map((c) => ({
-      name: c.name,
-      args: c.args,
-      status: c.status,
-      ok: c.ok,
-      latencyMs: c.latencyMs,
-      body: c.body,
-    })),
-    latencyMs: params.latencyMs,
-    success: params.success,
   });
 
   if (neat && neat.toolCalls.length > 0) {
@@ -87,28 +71,8 @@ export async function analyzeCompletedRun(params: {
       success: params.success,
       priorEpisodes: prior,
       source: "neatlogs",
-      neatlogs: {
-        trace_id: neat.traceId,
-        search_query: neat.searchQuery,
-        llm_spans: neat.llmSpans,
-        detections: neat.detections,
-        project_detections: neat.projectDetections,
-        tensormux_requests: neat.tensormuxRequests,
-        extra_triggers: detectionNamesToTriggers(neat.detections),
-      },
     };
-    const analysis = analyzeRun(input);
-    console.log(
-      JSON.stringify({
-        type: "analyzer_source",
-        run_id: params.runId,
-        source: "neatlogs",
-        trace_id: neat.traceId,
-        tool_call_count: neat.toolCalls.length,
-        detection_triggers: input.neatlogs?.extra_triggers,
-      }),
-    );
-    return { source: "neatlogs", analysis, input };
+    return { source: "neatlogs", analysis: analyzeRun(input), input };
   }
 
   // Fallback: working-memory log, then in-memory toolCalls from this run

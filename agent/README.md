@@ -1,12 +1,12 @@
-# Agent runtime (Steps 2–7)
+# Agent runtime (Steps 2–8)
 
-Minimal Node/TypeScript planner that calls the mock CRM webhooks from `tools/`, with Neatlogs OpenTelemetry tracing, SQLite **working memory**, SQLite **episodic vector memory**, a **deterministic post-run analyzer**, a **reflection LLM** (TensorMux / offline fallback), and **Neo4j semantic memory** with an evidence gate.
+Minimal Node/TypeScript planner that calls the mock CRM webhooks from `tools/`, with Neatlogs OpenTelemetry tracing, SQLite **working memory**, SQLite **episodic vector memory**, a **deterministic post-run analyzer**, a **reflection LLM** (TensorMux / offline fallback), **Neo4j semantic memory** with an evidence gate, and **strategy injection** of usable lessons into new runs.
 
 ## AO session entrypoint
 
 **One planner run** is `runOnePlanner(task)` in `src/runPlanner.ts`.
 
-That function is the unit to wrap later as an AO session: input = natural-language task, output = tool-call trace + final message + analyzer verdict + optional reflected lesson. Strategy injection of usable lessons into new tasks is **Step 8** — this step only stores candidates / promotes them.
+That function is the unit to wrap later as an AO session: input = natural-language task, output = tool-call trace + final message + analyzer verdict + optional reflected lesson + strategy injection of prior usable lessons.
 
 ```ts
 import { runOnePlanner } from "./runPlanner.js";
@@ -40,6 +40,54 @@ Custom task:
 npm run agent -- "Find orders for Sam Rivera"
 ```
 
+## Strategy injection (Step 8)
+
+At run start, `runOnePlanner`:
+
+1. **Extract factors** from the task text (+ optional prior episode blurbs) — see factor list below.
+2. **Retrieve usable lessons** (`evidence_count >= 2` only; candidates stay hidden):
+   - **Direct match** — strong factor overlap + confidence threshold.
+   - **Shared-factor traversal** — if nothing strong, rank lessons by shared-factor count and take top-k.
+3. Write hits into `working_runs.injected_context` as `semantic_lesson` entries.
+4. **Inject into planners:**
+   - TensorMux: lessons appended to the system prompt.
+   - Offline: when a resolve-`customer_id` lesson is present, search/resolve **before** `list_orders` (demo behavior changes without credentials).
+5. If no usable semantic hit → keep **episodic fallback** (unchanged).
+
+Stdout: `strategy_factors` → `strategy_inject` (`path`: `direct` | `shared_factor` | `none`) → optional `episodic_skip` / `episodic_inject`.
+
+| Env | Purpose |
+|-----|---------|
+| `STRATEGY_INJECTION` | `1` (default) on; `0`/`false` off (naive / episodic-only demos) |
+| `STRATEGY_MIN_CONFIDENCE` | Direct-match confidence floor (default `0.55`) |
+| `STRATEGY_DIRECT_OVERLAP` | Min overlap ratio for direct vs shared-factor (default `0.5`) |
+| `STRATEGY_TOP_K` | Max lessons to inject (default `3`) |
+
+### Factor list (`src/factors.ts`)
+
+| Factor | Meaning |
+|--------|---------|
+| `needs_customer_id` | Task needs a resolved CRM `customer_id` |
+| `ambiguous_customer_match` | Display name without a unique id |
+| `order_lookup` | Listing / inspecting orders |
+| `ticket_create` | Opening a support ticket |
+| `customer_search` | Must find the customer record first |
+| `missing_customer_id` | Lesson/failure: tool used without `customer_id` |
+| `list_orders_before_resolve` | Lesson/failure: `list_orders` before resolve |
+| `bad_list_orders_usage` | Lesson/failure: wrong / unscoped `list_orders` args |
+
+Aliases bridge task cues ↔ lesson tags so an unseen wording still hits via shared-factor traversal.
+
+### Prove learning loop (naive vs injected unseen task)
+
+```bash
+# needs npm run tools on :5678; leave Neo4j blank for local fallback
+npm run strategy:prove
+# → promote usable lesson (two naive runs)
+# → naive baseline on unseen wording (injection off): list_orders first / misses
+# → injected unseen wording: search_customers first, fewer failed list_orders
+```
+
 ## Reflection + semantic memory (Step 7)
 
 After the analyzer, **only if `flagged === true`**:
@@ -50,7 +98,7 @@ After the analyzer, **only if `flagged === true`**:
    - `(:Situation)-[:RESOLVED_BY]->(:Lesson)-[:APPLIES_TO]->(:Tool)`
    - `(:Lesson)-[:SUPPORTED_BY]->(:Run)`
 3. **Evidence gate**
-   - First sighting: `evidence_count=1`, `usable=false` (**candidate** — not eligible for planner injection yet)
+   - First sighting: `evidence_count=1`, `usable=false` (**candidate** — not eligible for planner injection)
    - Second independent corroborating run (same situation/factors/tool): `evidence_count>=2`, confidence set, `usable=true` (**promoted**)
 
 Stdout pipeline: `analyzer_result` → `reflection_gate` (`flagged`) → `reflection_result` (`reflected`) → `semantic_memory_upsert` (`candidate` | `promoted`).
@@ -126,9 +174,9 @@ One row per planner run in `working_runs` (path via `WORKING_DB_PATH`, default `
 | `started_at` | ISO timestamp |
 | `current_step` | Tool-call count so far |
 | `tool_call_log` | JSON append-only log of tool calls this run |
-| `injected_context` | JSON soft context (episodic hits; later: semantic lessons) |
+| `injected_context` | JSON soft context (usable semantic lessons and/or episodic hits) |
 
-Lifecycle: insert on start → retrieve episodic soft context (when no semantic lessons yet) → append after each tool call → set status on end → write episodic row → **analyzer → reflect → semantic upsert**.
+Lifecycle: insert on start → **strategy retrieval** (usable lessons) → episodic fallback if none → append after each tool call → set status on end → write episodic row → **analyzer → reflect → semantic upsert**.
 
 ```bash
 npm run working:list
@@ -146,7 +194,7 @@ Requires Node with built-in `node:sqlite` (Node ≥ 22.5). The `data/` directory
 | `EPISODIC_RETRIEVE_K` | Top-k nearest episodes to inject (default `3`) |
 | `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | Optional API embeddings; blank → offline hash |
 
-**Run-start injection:** if `injected_context` has no `semantic_lesson` entries, query episodic memory and store hits as soft context. Step 8 will inject usable Neo4j lessons instead.
+**Run-start injection:** if `injected_context` has no `semantic_lesson` entries, query episodic memory and store hits as soft context.
 
 ```bash
 npm run episodic:list
@@ -181,13 +229,16 @@ If missing, the runner uses the **deterministic offline planner** and **offline 
 
 ## Offline / naive behavior (intentional)
 
-The offline planner **calls `list_orders` before resolving `customer_id`**. That miss (`missing_customer_id` / unscoped) is the teaching signal. The analyzer flags it; reflection proposes the lesson; a second corroborating run promotes it.
+Without usable injected lessons, the offline planner **calls `list_orders` before resolving `customer_id`**. That miss (`missing_customer_id` / unscoped) is the teaching signal. The analyzer flags it; reflection proposes the lesson; a second corroborating run promotes it. On a later unseen task, Step 8 injects the usable lesson and the offline planner searches first.
 
 ## Layout
 
 | Path | Role |
 |------|------|
-| `src/runPlanner.ts` | `runOnePlanner` — AO entrypoint + memories + analyzer + reflection |
+| `src/runPlanner.ts` | `runOnePlanner` — AO entrypoint + strategy + memories + analyzer + reflection |
+| `src/factors.ts` | Documented factor vocabulary + deterministic extractor |
+| `src/strategy.ts` | Usable-lesson retrieval (direct / shared-factor) + prompt helpers |
+| `src/proveStrategy.ts` | `npm run strategy:prove` — naive vs injected unseen task |
 | `src/analyzer.ts` | Pure `analyzeRun` |
 | `src/analyzeCompletedRun.ts` | Neatlogs-or-working-memory loader → `analyzeRun` |
 | `src/reflection.ts` | TensorMux / offline candidate lesson |
@@ -202,5 +253,5 @@ The offline planner **calls `list_orders` before resolving `customer_id`**. That
 | `src/index.ts` | CLI / `npm run agent` |
 | `src/observability.ts` | Neatlogs init / spans |
 | `src/tools.ts` | Webhook client |
-| `src/llm.ts` | TensorMux planner client |
-| `src/offlinePlanner.ts` | Deterministic naive fallback |
+| `src/llm.ts` | TensorMux planner client (lesson block in system prompt) |
+| `src/offlinePlanner.ts` | Deterministic naive / learned fallback |

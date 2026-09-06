@@ -7,7 +7,7 @@
  *
  * Evidence gate: evidence_count=1 → candidate (not usable);
  * evidence_count>=2 → promoted (usable) with confidence set.
- * Planner injection of usable lessons is Step 8 — this module only stores.
+ * Step 8 (`strategy.ts`) retrieves usable lessons for planner injection.
  */
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";

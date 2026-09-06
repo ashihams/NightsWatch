@@ -36,13 +36,18 @@ When you are done (success or stuck), respond with plain text only — no more t
 
 /**
  * One planner step via TensorMux chat completions + tools.
+ * Optional `lessonBlock` is appended to the system prompt (Step 8 strategy injection).
  */
 export async function planNextStep(
   task: string,
   history: LlmMessage[],
+  lessonBlock?: string,
 ): Promise<PlannerAction> {
+  const systemContent = lessonBlock?.trim()
+    ? `${SYSTEM}\n\n${lessonBlock.trim()}`
+    : SYSTEM;
   const messages: LlmMessage[] = [
-    { role: "system", content: SYSTEM },
+    { role: "system", content: systemContent },
     { role: "user", content: task },
     ...history,
   ];

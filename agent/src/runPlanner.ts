@@ -5,7 +5,8 @@
  * single unit of "agent work" for a natural-language task.
  *
  * Working memory (SQLite): one row per run — start → append tool calls → complete|failed.
- * Episodic memory (SQLite vectors): retrieve soft context at start; write episode on end.
+ * Strategy (Step 8): retrieve usable semantic lessons at start → inject into planner.
+ * Episodic memory (SQLite vectors): fallback soft context when no strong semantic hit.
  * Post-run: deterministic analyzer → reflection LLM (if flagged) → semantic memory evidence gate.
  */
 
@@ -44,6 +45,13 @@ import {
   storeCandidateLesson,
   type StoreLessonResult,
 } from "./semanticMemory.js";
+import {
+  formatLessonsForPrompt,
+  getInjectedSemanticLessons,
+  lessonsToInjectedContext,
+  retrieveStrategyLessons,
+  strategyInjectionEnabled,
+} from "./strategy.js";
 import type { AnalyzeRunResult, NormalizedToolCall } from "./analyzer.js";
 
 export type PlannerRunResult = {
@@ -70,6 +78,90 @@ function maxSteps(): number {
 function retrieveK(): number {
   const n = Number(process.env.EPISODIC_RETRIEVE_K || 3);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3;
+}
+
+/**
+ * Step 8: query usable semantic lessons first (direct or shared-factor).
+ * Writes semantic_lesson entries into working_runs.injected_context when strong enough.
+ */
+async function maybeInjectStrategyLessons(
+  runId: string,
+  task: string,
+): Promise<void> {
+  if (!strategyInjectionEnabled()) {
+    console.log(
+      JSON.stringify({
+        type: "strategy_inject",
+        run_id: runId,
+        enabled: false,
+        note: "STRATEGY_INJECTION disabled",
+      }),
+    );
+    return;
+  }
+
+  // Soft prior episode blurbs help factor extraction without injecting them yet.
+  const priorMatches = await retrieveEpisodes(task, retrieveK());
+  const priorSummaries = priorMatches.map((m) => m.situation_summary);
+
+  const retrieval = await retrieveStrategyLessons({
+    task,
+    priorEpisodeSummaries: priorSummaries,
+  });
+
+  console.log(
+    JSON.stringify({
+      type: "strategy_factors",
+      run_id: runId,
+      factors: retrieval.factors.factors,
+      factor_evidence: retrieval.factors.evidence,
+      query_factors: retrieval.query_factors,
+    }),
+  );
+
+  if (retrieval.path === "none" || retrieval.lessons.length === 0) {
+    console.log(
+      JSON.stringify({
+        type: "strategy_inject",
+        run_id: runId,
+        path: "none",
+        injected: 0,
+        note: "no usable lessons matched; episodic fallback may run",
+      }),
+    );
+    return;
+  }
+
+  const soft = lessonsToInjectedContext(retrieval);
+  const existing = getInjectedContext(runId);
+  const kept = existing.filter(
+    (item) =>
+      !(
+        item !== null &&
+        typeof item === "object" &&
+        (item as { type?: string }).type === "semantic_lesson"
+      ),
+  );
+  setInjectedContext(runId, [...kept, ...soft]);
+
+  console.log(
+    JSON.stringify({
+      type: "strategy_inject",
+      run_id: runId,
+      path: retrieval.path,
+      injected: soft.length,
+      min_confidence: retrieval.min_confidence,
+      lessons: soft.map((l) => ({
+        id: l.lesson_id,
+        text: l.text,
+        confidence: l.confidence,
+        evidence_count: l.evidence_count,
+        retrieval_path: l.retrieval_path,
+        shared_factor_count: l.shared_factor_count,
+        matched_factors: l.matched_factors,
+      })),
+    }),
+  );
 }
 
 async function maybeInjectEpisodicContext(
@@ -321,7 +413,13 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
       }),
     );
 
+    // Semantic lessons first; episodic only when nothing strong was injected.
+    await maybeInjectStrategyLessons(runId, task);
     await maybeInjectEpisodicContext(runId, task);
+
+    const injected = getInjectedContext(runId);
+    const semanticLessons = getInjectedSemanticLessons(injected);
+    const lessonBlock = formatLessonsForPrompt(semanticLessons);
 
     let finalMessage = "";
     let runStatus: "complete" | "failed" = "complete";
@@ -330,8 +428,8 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
       for (let step = 0; step < limit; step++) {
         const action =
           mode === "tensormux"
-            ? await planNextStep(task, history)
-            : offlinePlanNext(task, toolCalls);
+            ? await planNextStep(task, history, lessonBlock)
+            : offlinePlanNext(task, toolCalls, injected);
 
         if (action.type === "finish") {
           finalMessage = action.message;

@@ -79,7 +79,15 @@ export function offlineReflect(params: {
   const triggers = analysis.triggers;
 
   if (extractMissingCustomerIdSignals(toolCalls, analysis.evidence)) {
+    // Stable factor set (same situation_id across corroborating runs) mixing
+    // task cues + failure tags so Step 8 shared-factor retrieval can hit this
+    // lesson from an unseen wording of the same underlying need.
     const factors = [
+      "needs_customer_id",
+      "order_lookup",
+      "customer_search",
+      "ambiguous_customer_match",
+      "ticket_create",
       "missing_customer_id",
       "list_orders_before_resolve",
       "bad_list_orders_usage",

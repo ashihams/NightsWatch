@@ -35,17 +35,6 @@ export type AnalyzeRunInput = {
   priorEpisodes: PriorEpisodeSummary[];
   /** Which path produced toolCalls */
   source: "neatlogs" | "working_memory";
-  /** Optional Neatlogs MCP / eval enrichment (ignored by older callers) */
-  neatlogs?: {
-    trace_id?: string;
-    search_query?: string;
-    llm_spans?: unknown[];
-    detections?: unknown[];
-    project_detections?: unknown[];
-    tensormux_requests?: unknown[];
-    /** Extra triggers from fired Neatlogs detections / eval rules */
-    extra_triggers?: string[];
-  };
 };
 
 export type AnalyzeRunResult = {
@@ -269,27 +258,6 @@ export function analyzeRun(input: AnalyzeRunInput): AnalyzeRunResult {
       reason: input.success ? "empty_sequence" : "run_not_successful",
       current_sequence: currentSeq,
     };
-  }
-
-  // --- Neatlogs detections / eval (when MCP read-back succeeded) ---
-  if (input.neatlogs) {
-    evidence.neatlogs = {
-      trace_id: input.neatlogs.trace_id,
-      search_query: input.neatlogs.search_query,
-      llm_span_count: Array.isArray(input.neatlogs.llm_spans)
-        ? input.neatlogs.llm_spans.length
-        : 0,
-      detections: input.neatlogs.detections,
-      project_detection_count: Array.isArray(input.neatlogs.project_detections)
-        ? input.neatlogs.project_detections.length
-        : 0,
-      tensormux_request_samples: Array.isArray(input.neatlogs.tensormux_requests)
-        ? input.neatlogs.tensormux_requests.length
-        : 0,
-    };
-    for (const t of input.neatlogs.extra_triggers || []) {
-      if (!triggers.includes(t)) triggers.push(t);
-    }
   }
 
   return {

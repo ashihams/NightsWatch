@@ -115,7 +115,7 @@ export function finishWorkingRun(
     .run(status, runId);
 }
 
-/** Replace injected_context JSON for a run (episodic soft context, later lessons). */
+/** Replace injected_context JSON for a run (semantic lessons and/or episodic soft context). */
 export function setInjectedContext(
   runId: string,
   context: unknown[],
@@ -138,8 +138,8 @@ export function getInjectedContext(runId: string): unknown[] {
 }
 
 /**
- * True when injected_context already has semantic lessons (reflection phase).
- * Until that phase exists, this is always false → episodic retrieval runs.
+ * True when injected_context already has semantic lessons (Step 8 strategy injection).
+ * When true, episodic retrieval is skipped.
  */
 export function hasSemanticLessons(context: unknown): boolean {
   if (!Array.isArray(context)) return false;
