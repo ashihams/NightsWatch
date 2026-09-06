@@ -1,0 +1,81 @@
+{
+  "name": "Loop - create_ticket",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "create_ticket",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-create-ticket",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "nw-create-ticket"
+    },
+    {
+      "parameters": {
+        "jsCode": "const validIds = new Set(['cust_1001','cust_1002','cust_1003','cust_1004','cust_1005','cust_1006','cust_1007','cust_1008']);\nconst body = $input.first().json.body || $input.first().json;\nconst customerId = body.customer_id || body.customerId;\nconst subject = String(body.subject || '').trim();\nconst ticketBody = String(body.body || body.message || '').trim();\nif (!customerId) {\n  return [{ json: { ok: false, error: 'missing_customer_id', message: 'create_ticket requires { customer_id, subject, body }.', _status: 400 } }];\n}\nif (!subject || !ticketBody) {\n  return [{ json: { ok: false, error: 'missing_fields', message: 'create_ticket requires non-empty subject and body.', _status: 400 } }];\n}\nif (!validIds.has(customerId)) {\n  return [{ json: { ok: false, error: 'customer_not_found', message: `Cannot create ticket for unknown customer_id ${customerId}`, _status: 404 } }];\n}\nif (Math.random() < 0.2) {\n  return [{ json: { ok: false, error: 'rate_limited', message: 'Too many ticket writes. Retry after a short backoff.', retry_after_seconds: 3, _status: 429 } }];\n}\nconst ticket = { ticket_id: 'tkt_' + Date.now(), customer_id: customerId, subject, body: ticketBody, status: 'open', created_at: new Date().toISOString() };\nreturn [{ json: { ok: true, ticket, _status: 201 } }];"
+      },
+      "id": "code-create-ticket",
+      "name": "Handle",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": "={{ $json._status || 200 }}"
+        }
+      },
+      "id": "resp-create-ticket",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        520,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Handle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "active": false
+}

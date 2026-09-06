@@ -1,0 +1,81 @@
+{
+  "name": "Loop - get_customer",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "get_customer",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-get-customer",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "nw-get-customer"
+    },
+    {
+      "parameters": {
+        "jsCode": "const customers = [\n  { customer_id: 'cust_1001', name: 'Jordan Lee', email: 'jordan.lee@example.com', phone: '+1-555-0101', company: 'Northwind Labs', status: 'active' },\n  { customer_id: 'cust_1002', name: 'Jordan Lee', email: 'jlee@acme.co', phone: '+1-555-0199', company: 'Acme Retail', status: 'active' },\n  { customer_id: 'cust_1003', name: 'Sam Rivera', email: 'sam.rivera@example.com', phone: '+1-555-0142', company: 'Rivera Consulting', status: 'active' },\n  { customer_id: 'cust_1004', name: 'Sam Rivera', email: 's.rivera+billing@example.org', phone: null, company: null, status: 'inactive' },\n  { customer_id: 'cust_1005', name: 'Alex Chen', email: 'alex.chen@globex.io', phone: '+1-555-0177', company: 'Globex', status: 'active' },\n  { customer_id: 'cust_1006', name: 'Alex Chen', email: 'achen@example.net', phone: '+1-555-0178', company: 'Freelance', status: 'active' },\n  { customer_id: 'cust_1007', name: 'Morgan Blake', email: 'morgan@example.com', phone: '+1-555-0110', company: 'Blake & Co', status: 'active' },\n  { customer_id: 'cust_1008', name: 'Taylor Kim', email: 'taylor.kim@example.com', phone: '+1-555-0120', company: 'Kim Ventures', status: 'churned' },\n];\nconst body = $input.first().json.body || $input.first().json;\nconst customerId = body.customer_id || body.customerId;\nif (!customerId) {\n  return [{ json: { ok: false, error: 'missing_customer_id', message: 'get_customer requires { customer_id }.', _status: 400 } }];\n}\nconst customer = customers.find(c => c.customer_id === customerId);\nif (!customer) {\n  return [{ json: { ok: false, error: 'customer_not_found', message: `No customer with id ${customerId}`, customer_id: customerId, _status: 404 } }];\n}\nreturn [{ json: { ok: true, customer, _status: 200 } }];"
+      },
+      "id": "code-get-customer",
+      "name": "Handle",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": "={{ $json._status || 200 }}"
+        }
+      },
+      "id": "resp-get-customer",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        520,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Handle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "active": false
+}

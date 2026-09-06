@@ -1,0 +1,81 @@
+{
+  "name": "Loop - list_orders",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "list_orders",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-list-orders",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "nw-list-orders"
+    },
+    {
+      "parameters": {
+        "jsCode": "const orders = [\n  { order_id: 'ord_5001', customer_id: 'cust_1001', status: 'shipped', total: 129.99, currency: 'USD', created_at: '2026-01-12T14:22:00Z' },\n  { order_id: 'ord_5002', customer_id: 'cust_1001', status: 'processing', total: 49.0, currency: 'USD', created_at: '2026-03-01T09:10:00Z' },\n  { order_id: 'ord_5003', customer_id: 'cust_1002', status: 'delivered', total: 899.0, currency: 'USD', created_at: '2025-11-20T18:00:00Z' },\n  { order_id: 'ord_5004', customer_id: 'cust_1003', status: 'cancelled', total: 200.0, currency: 'USD', created_at: '2026-02-05T11:30:00Z' },\n  { order_id: 'ord_5005', customer_id: 'cust_1005', status: 'shipped', total: 59.99, currency: 'USD', created_at: '2026-04-18T16:45:00Z' },\n  { order_id: 'ord_5006', customer_id: 'cust_1005', status: 'refunded', total: 59.99, currency: 'USD', created_at: '2026-04-20T08:00:00Z' },\n  { order_id: 'ord_5007', customer_id: 'cust_1006', status: 'delivered', total: 19.99, currency: 'USD', created_at: '2026-05-02T12:00:00Z' },\n  { order_id: 'ord_5008', customer_id: 'cust_1007', status: 'processing', total: 450.0, currency: 'USD', created_at: '2026-06-10T07:15:00Z' },\n];\nconst body = $input.first().json.body || $input.first().json;\nconst customerId = body.customer_id || body.customerId;\nif (!customerId) {\n  // Dependency the agent must learn: fail or return unscoped junk\n  if (Math.random() < 0.5) {\n    return [{ json: { ok: false, error: 'missing_customer_id', message: 'list_orders requires { customer_id }. Resolve via search_customers / get_customer first.', _status: 400 } }];\n  }\n  return [{ json: { ok: true, warning: 'No customer_id — unscoped recent orders. Do not assume these belong to your user.', unscoped: true, orders: orders.slice(0, 3), _status: 200 } }];\n}\nconst list = orders.filter(o => o.customer_id === customerId);\nreturn [{ json: { ok: true, customer_id: customerId, order_count: list.length, orders: list, _status: 200 } }];"
+      },
+      "id": "code-list-orders",
+      "name": "Handle",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": "={{ $json._status || 200 }}"
+        }
+      },
+      "id": "resp-list-orders",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        520,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Handle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "active": false
+}

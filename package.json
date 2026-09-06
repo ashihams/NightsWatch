@@ -1,0 +1,16 @@
+{
+  "name": "nights-watch-ao",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Nights Watch — agent that learns third-party tools over repeated runs",
+  "scripts": {
+    "tools": "node tools/mock-server/index.js",
+    "mock-server": "node tools/mock-server/index.js",
+    "n8n:up": "docker compose -f infra/n8n/docker-compose.yml up -d",
+    "n8n:down": "docker compose -f infra/n8n/docker-compose.yml down",
+    "n8n:import": "powershell -NoProfile -ExecutionPolicy Bypass -File infra/n8n/import-workflows.ps1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
