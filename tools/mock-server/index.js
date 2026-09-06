@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Minimal CRM / support webhook mock for Loop.
  * POST JSON endpoints that behave like imperfect third-party tools.
  *

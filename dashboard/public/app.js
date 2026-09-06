@@ -1,4 +1,4 @@
-﻿/* Loop demo dashboard — cyberpunk UI + live demo runner. */
+/* Loop demo dashboard — cyberpunk UI + live demo runner. */
 
 const POLL_MS = 3000;
 const MAX_CONSOLE_LINES = 220;

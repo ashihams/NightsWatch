@@ -9,4 +9,3 @@ node_modules/
 dist/
 data/
 infra/tensormux/tensormux_requests.jsonl
-.vercel
