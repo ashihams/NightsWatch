@@ -19,9 +19,12 @@ npm run agent
 # Second run should retrieve the first episode (stdout: episodic_retrieve / episodic_inject)
 npm run agent
 
+# Deterministic analyzer proof (flagged naive vs clean)
+npm run analyzer:prove
+
 # Inspect stores
 npm run working:list
 npm run episodic:list
 ```
 
-See `tools/README.md` for webhook contracts and `agent/README.md` for the planner, AO entrypoint, Neatlogs, SQLite working memory, and episodic vector memory.
+See `tools/README.md` for webhook contracts and `agent/README.md` for the planner, AO entrypoint, Neatlogs, SQLite working/episodic memory, and the Step 6 post-run analyzer.

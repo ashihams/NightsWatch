@@ -151,6 +151,19 @@ export function hasSemanticLessons(context: unknown): boolean {
   );
 }
 
+/** Fetch one working_runs row by id (null if missing). */
+export function getWorkingRun(runId: string): WorkingRunRow | null {
+  const row = getDb()
+    .prepare(
+      `SELECT run_id, task_description, status, started_at, current_step,
+              tool_call_log, injected_context
+       FROM working_runs
+       WHERE run_id = ?`,
+    )
+    .get(runId) as Record<string, unknown> | undefined;
+  return row ? parseRow(row) : null;
+}
+
 /** Recent runs newest-first (for inspect script). */
 export function listWorkingRuns(limit = 20): WorkingRunRow[] {
   const rows = getDb()

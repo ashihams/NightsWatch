@@ -6,6 +6,7 @@
  *
  * Working memory (SQLite): one row per run — start → append tool calls → complete|failed.
  * Episodic memory (SQLite vectors): retrieve soft context at start; write episode on end.
+ * Post-run: deterministic analyzer (no reflection LLM); pending_reflection if flagged.
  */
 
 import {
@@ -32,6 +33,9 @@ import {
   retrieveEpisodes,
   writeEpisode,
 } from "./episodicMemory.js";
+import { analyzeCompletedRun } from "./analyzeCompletedRun.js";
+import { writePendingReflection } from "./pendingReflection.js";
+import type { AnalyzeRunResult } from "./analyzer.js";
 
 export type PlannerRunResult = {
   task: string;
@@ -40,6 +44,8 @@ export type PlannerRunResult = {
   steps: number;
   toolCalls: ToolCallResult[];
   finalMessage: string;
+  analysis?: AnalyzeRunResult;
+  analysisSource?: "neatlogs" | "working_memory";
 };
 
 function isToolName(name: string): name is ToolName {
@@ -133,6 +139,64 @@ async function persistEpisode(params: {
 }
 
 /**
+ * Always run the deterministic analyzer after a run ends.
+ * If flagged, write pending_reflection for Step 7 — do NOT call reflection LLM.
+ */
+async function runPostAnalyzer(params: {
+  runId: string;
+  task: string;
+  toolCalls: ToolCallResult[];
+  latencyMs: number;
+  success: boolean;
+  mode: string;
+  finalMessage: string;
+}): Promise<{
+  analysis: AnalyzeRunResult;
+  source: "neatlogs" | "working_memory";
+}> {
+  const { analysis, source } = await analyzeCompletedRun({
+    runId: params.runId,
+    task: params.task,
+    toolCalls: params.toolCalls,
+    latencyMs: params.latencyMs,
+    success: params.success,
+  });
+
+  console.log(
+    JSON.stringify({
+      type: "analyzer_result",
+      run_id: params.runId,
+      source,
+      flagged: analysis.flagged,
+      triggers: analysis.triggers,
+      evidence_keys: Object.keys(analysis.evidence),
+    }),
+  );
+
+  if (analysis.flagged) {
+    const path = writePendingReflection({
+      runId: params.runId,
+      task: params.task,
+      source,
+      analysis,
+      mode: params.mode,
+      finalMessage: params.finalMessage,
+    });
+    console.log(
+      JSON.stringify({
+        type: "pending_reflection",
+        run_id: params.runId,
+        path,
+        triggers: analysis.triggers,
+        note: "reflection LLM deferred to Step 7",
+      }),
+    );
+  }
+
+  return { analysis, source };
+}
+
+/**
  * Run a single planner loop for `task`.
  * Routes LLM planning through TensorMux when configured; otherwise offline naive planner.
  *
@@ -204,12 +268,23 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
       }
 
       finishWorkingRun(runId, runStatus);
+      const latencyMs = Date.now() - runStarted;
       await persistEpisode({
         runId,
         task,
         toolCalls,
         success: runStatus === "complete",
-        latencyMs: Date.now() - runStarted,
+        latencyMs,
+      });
+
+      const { analysis, source: analysisSource } = await runPostAnalyzer({
+        runId,
+        task,
+        toolCalls,
+        latencyMs,
+        success: runStatus === "complete",
+        mode,
+        finalMessage,
       });
 
       console.log(
@@ -220,6 +295,8 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
           status: runStatus,
           steps: toolCalls.length,
           final_message: finalMessage,
+          analyzer_flagged: analysis.flagged,
+          analyzer_triggers: analysis.triggers,
         }),
       );
 
@@ -230,16 +307,19 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
         steps: toolCalls.length,
         toolCalls,
         finalMessage,
+        analysis,
+        analysisSource,
       };
     } catch (err) {
       finishWorkingRun(runId, "failed");
+      const latencyMs = Date.now() - runStarted;
       try {
         await persistEpisode({
           runId,
           task,
           toolCalls,
           success: false,
-          latencyMs: Date.now() - runStarted,
+          latencyMs,
         });
       } catch (persistErr) {
         console.log(
@@ -250,6 +330,28 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
               persistErr instanceof Error
                 ? persistErr.message
                 : String(persistErr),
+          }),
+        );
+      }
+      try {
+        await runPostAnalyzer({
+          runId,
+          task,
+          toolCalls,
+          latencyMs,
+          success: false,
+          mode,
+          finalMessage: err instanceof Error ? err.message : String(err),
+        });
+      } catch (analyzeErr) {
+        console.log(
+          JSON.stringify({
+            type: "analyzer_error",
+            run_id: runId,
+            error:
+              analyzeErr instanceof Error
+                ? analyzeErr.message
+                : String(analyzeErr),
           }),
         );
       }
