@@ -8,7 +8,20 @@ Neatlogs MCP has **no create_eval tool**. Create this evaluation once in the das
 4. Build the form with the questions below
 5. Assign an **AI evaluator** (or yourself) to each question → Launch
 
-Every Loop planner run now stamps `loop_eval` on the WORKFLOW output (`latency_ms`, `speed_score`, `robustness_score`, `token_*`, `drift_signals`). Use those fields when judging.
+Every Loop planner run now stamps `loop_eval` on the WORKFLOW output (`latency_ms`, `speed_score`, `robustness_score`, `token_*`, `task_success`, `drift_signals`). Use those fields when judging.
+
+### Agent v1 → v2 → v3 scorecard
+
+`npm run replay:demo` buckets the same per-run metrics by **lesson-promotion boundaries** (no new instrumentation):
+
+| Version | Boundary |
+|---------|----------|
+| **v1** | before first usable lesson promotion (naive) |
+| **v2** | the promoting run (evidence gate) |
+| **v3** | after promotion (lesson injectable / retrieved) |
+
+Stdout emits `agent_version_scorecard`; `data/replay-demo/trajectory.json` and the dashboard **AGENT_SCORECARD** panel show the comparative table (`task_success_rate`, `avg_speed_score`, `avg_robustness_score`, `avg_latency_ms`).
+
 
 ## Form questions
 

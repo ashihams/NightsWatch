@@ -34,7 +34,14 @@ import { getInjectedSemanticLessons } from "../agent/src/strategy.js";
 import { getInjectedContext, getWorkingRun } from "../agent/src/workingMemory.js";
 import { listEpisodes } from "../agent/src/episodicMemory.js";
 import type { ToolCallResult } from "../agent/src/tools.js";
-
+import {
+  buildAgentVersionScorecard,
+  computeLoopEvalMetrics,
+  computeTaskSuccess,
+  formatAgentVersionScorecardTable,
+  type AgentVersionScorecard,
+  type LoopEvalMetrics,
+} from "../agent/src/evalMetrics.js";
 /** Written for the demo dashboard (`npm run dashboard`). */
 export const REPLAY_TRAJECTORY_PATH = "./data/replay-demo/trajectory.json";
 
@@ -63,6 +70,10 @@ type TrajectoryRow = {
   retrieval_path: string | null;
   analyzer_flagged: boolean | null;
   reflection_status: "promoted" | "candidate" | "skipped" | "failed";
+  /** Per-run loop_eval (includes task_success, speed, robustness). */
+  eval_metrics: LoopEvalMetrics;
+  /** Agent version bucket for this run (v1/v2/v3). Filled after spine completes. */
+  agent_version?: "v1" | "v2" | "v3";
 };
 
 function loadScenarios(): Scenario[] {
@@ -100,15 +111,16 @@ function isFailedOrUnscopedListOrders(c: ToolCallResult): boolean {
 
 /** Task-level success for the demo trajectory (not merely working_runs complete). */
 function taskSuccess(toolCalls: ToolCallResult[]): boolean {
-  const failedList = toolCalls.filter(isFailedOrUnscopedListOrders).length;
-  const scopedOk = toolCalls.some(
-    (c) =>
-      c.name === "list_orders" &&
-      c.ok &&
-      Boolean(c.args?.customer_id) &&
-      !isFailedOrUnscopedListOrders(c),
+  return computeTaskSuccess(
+    toolCalls.map((c) => ({
+      name: c.name,
+      ok: c.ok,
+      status: c.status,
+      latencyMs: c.latencyMs,
+      body: c.body,
+      args: c.args,
+    })),
   );
-  return failedList === 0 && scopedOk;
 }
 
 function failedToolCalls(toolCalls: ToolCallResult[]): number {
@@ -152,6 +164,28 @@ function captureRow(
     semantic[0]?.retrieval_path ??
     (working && semantic.length === 0 ? null : null);
 
+  const eval_metrics = computeLoopEvalMetrics({
+    latencyMs: episode?.latency_ms ?? wallLatencyMs,
+    toolCalls: result.toolCalls.map((c) => ({
+      name: c.name,
+      ok: c.ok,
+      status: c.status,
+      latencyMs: c.latencyMs,
+      body: c.body,
+      args: c.args,
+    })),
+    analyzerTriggers: result.analysis?.triggers,
+  });
+  // Prefer tokens already recorded on the eval blob / episode when present.
+  if (episode?.token_count) {
+    eval_metrics.token_total = episode.token_count;
+  } else if (
+    result.evalMetrics &&
+    typeof result.evalMetrics.token_total === "number"
+  ) {
+    eval_metrics.token_total = result.evalMetrics.token_total as number;
+  }
+
   return {
     run_id: result.runId,
     label,
@@ -169,6 +203,7 @@ function captureRow(
     retrieval_path: semantic[0]?.retrieval_path ?? retrieval_path,
     analyzer_flagged: result.analysis?.flagged ?? null,
     reflection_status,
+    eval_metrics,
   };
 }
 
@@ -191,6 +226,10 @@ function printRow(row: TrajectoryRow): void {
       retrieval_path: row.retrieval_path,
       analyzer_flagged: row.analyzer_flagged,
       reflection_status: row.reflection_status,
+      task_success: row.eval_metrics.task_success,
+      speed_score: row.eval_metrics.speed_score,
+      robustness_score: row.eval_metrics.robustness_score,
+      agent_version: row.agent_version ?? null,
     }),
   );
 }
@@ -237,7 +276,10 @@ function printComparisonTable(rows: TrajectoryRow[]): void {
 }
 
 /** Persist last demo spine for the read-only dashboard API. */
-function writeTrajectoryArtifact(rows: TrajectoryRow[]): string {
+function writeTrajectoryArtifact(
+  rows: TrajectoryRow[],
+  scorecard: AgentVersionScorecard,
+): string {
   const path = resolve(
     process.cwd(),
     process.env.REPLAY_TRAJECTORY_PATH || REPLAY_TRAJECTORY_PATH,
@@ -247,9 +289,54 @@ function writeTrajectoryArtifact(rows: TrajectoryRow[]): string {
     type: "replay_trajectory",
     updated_at: new Date().toISOString(),
     rows,
+    scorecard,
   };
   writeFileSync(path, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   return path;
+}
+
+function buildScorecardFromRows(rows: TrajectoryRow[]): {
+  rows: TrajectoryRow[];
+  scorecard: AgentVersionScorecard;
+} {
+  const scorecard = buildAgentVersionScorecard(
+    rows.map((r) => ({
+      run_id: r.run_id,
+      label: r.label,
+      reflection_status: r.reflection_status,
+      lessons_promoted: r.lessons_promoted,
+      lessons_retrieved: r.lessons_retrieved,
+      first_tool: r.first_tool,
+      metrics: r.eval_metrics,
+    })),
+  );
+  const versionByRun = new Map<string, "v1" | "v2" | "v3">();
+  for (const bucket of scorecard.rows) {
+    for (const id of bucket.run_ids) {
+      versionByRun.set(id, bucket.version);
+    }
+  }
+  const stamped = rows.map((r) => ({
+    ...r,
+    agent_version: versionByRun.get(r.run_id),
+  }));
+  return { rows: stamped, scorecard };
+}
+
+function printAgentVersionScorecard(scorecard: AgentVersionScorecard): void {
+  console.log(
+    "\n=== Agent v1 → v2 → v3 scorecard (lesson-promotion boundaries) ===",
+  );
+  console.log(formatAgentVersionScorecardTable(scorecard));
+  console.log(
+    JSON.stringify({
+      type: "agent_version_scorecard",
+      bucketing: scorecard.bucketing,
+      note: scorecard.note,
+      comparison: scorecard.comparison,
+      rows: scorecard.rows,
+    }),
+  );
 }
 
 type ImprovementSignal = {
@@ -290,6 +377,7 @@ export type ReplayDemoResult = {
   trajectory_path: string;
   signals: ImprovementSignal[];
   exit_code: number;
+  scorecard?: AgentVersionScorecard;
 };
 
 export type RunReplayDemoOptions = {
@@ -471,20 +559,28 @@ export async function runReplayDemo(
 
       printComparisonTable(rows);
 
-      const trajectoryPath = writeTrajectoryArtifact(rows);
+      const { rows: stampedRows, scorecard } = buildScorecardFromRows(rows);
+      printAgentVersionScorecard(scorecard);
+
+      const trajectoryPath = writeTrajectoryArtifact(stampedRows, scorecard);
       console.log(
         JSON.stringify({
           type: "replay_trajectory_written",
           path: trajectoryPath,
-          row_count: rows.length,
+          row_count: stampedRows.length,
+          scorecard_versions: scorecard.rows.map((r) => ({
+            version: r.version,
+            runs: r.run_count,
+            task_success_rate: r.task_success_rate,
+          })),
         }),
       );
 
-      const seenA = rows.find((r) => r.label === "seen_a")!;
-      const seenB = rows.find((r) => r.label === "seen_b")!;
-      const unseen = rows.find((r) => r.label === "unseen")!;
+      const seenA = stampedRows.find((r) => r.label === "seen_a")!;
+      const seenB = stampedRows.find((r) => r.label === "seen_b")!;
+      const unseen = stampedRows.find((r) => r.label === "unseen")!;
 
-      const signals = evaluateImprovement(rows);
+      const signals = evaluateImprovement(stampedRows);
       const anyOk = signals.some((s) => s.ok);
 
       console.log("\n=== trajectory summary ===");
@@ -553,10 +649,11 @@ export async function runReplayDemo(
 
       return {
         ok: anyOk,
-        rows,
+        rows: stampedRows,
         trajectory_path: trajectoryPath,
         signals,
         exit_code: anyOk ? 0 : 1,
+        scorecard,
       };
     } finally {
       await closeSemanticMemory();

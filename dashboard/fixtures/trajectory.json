@@ -1,7 +1,7 @@
 {
   "type": "replay_trajectory",
   "updated_at": "2026-09-06T14:50:00.000Z",
-  "note": "Bundled snapshot for Vercel demo gallery (live RUN DEMO is local-only).",
+  "note": "Bundled snapshot for Vercel demo gallery.",
   "rows": [
     {
       "run_id": "demo-seen-a",
@@ -11,19 +11,29 @@
       "failed_tool_calls": 1,
       "failed_list_orders": 1,
       "first_tool": "list_orders",
-      "tool_sequence": [
-        "list_orders",
-        "search_customers",
-        "list_orders",
-        "create_ticket"
-      ],
+      "tool_sequence": ["list_orders", "search_customers", "list_orders", "create_ticket"],
       "latency_ms": 4543,
       "tokens": 0,
       "lessons_retrieved": 0,
       "lessons_promoted": [],
       "retrieval_path": null,
       "analyzer_flagged": true,
-      "reflection_status": "candidate"
+      "reflection_status": "candidate",
+      "agent_version": "v1",
+      "eval_metrics": {
+        "latency_ms": 4543,
+        "speed_score": 0.687,
+        "robustness_score": 0.75,
+        "tool_call_count": 4,
+        "tool_failure_count": 1,
+        "token_total": 0,
+        "token_prompt": 0,
+        "token_completion": 0,
+        "latency_flag": false,
+        "robustness_flag": true,
+        "drift_signals": ["tool_failure", "missing_customer_id"],
+        "task_success": false
+      }
     },
     {
       "run_id": "demo-seen-b",
@@ -33,19 +43,29 @@
       "failed_tool_calls": 1,
       "failed_list_orders": 1,
       "first_tool": "list_orders",
-      "tool_sequence": [
-        "list_orders",
-        "search_customers",
-        "list_orders",
-        "create_ticket"
-      ],
+      "tool_sequence": ["list_orders", "search_customers", "list_orders", "create_ticket"],
       "latency_ms": 606,
       "tokens": 0,
       "lessons_retrieved": 0,
       "lessons_promoted": ["lesson_resolve_customer_id"],
       "retrieval_path": null,
       "analyzer_flagged": true,
-      "reflection_status": "promoted"
+      "reflection_status": "promoted",
+      "agent_version": "v2",
+      "eval_metrics": {
+        "latency_ms": 606,
+        "speed_score": 0.943,
+        "robustness_score": 0.75,
+        "tool_call_count": 4,
+        "tool_failure_count": 1,
+        "token_total": 0,
+        "token_prompt": 0,
+        "token_completion": 0,
+        "latency_flag": false,
+        "robustness_flag": true,
+        "drift_signals": ["tool_failure", "missing_customer_id"],
+        "task_success": false
+      }
     },
     {
       "run_id": "demo-unseen",
@@ -55,18 +75,110 @@
       "failed_tool_calls": 0,
       "failed_list_orders": 0,
       "first_tool": "search_customers",
-      "tool_sequence": [
-        "search_customers",
-        "list_orders",
-        "create_ticket"
-      ],
+      "tool_sequence": ["search_customers", "list_orders", "create_ticket"],
       "latency_ms": 402,
       "tokens": 0,
       "lessons_retrieved": 1,
       "lessons_promoted": [],
       "retrieval_path": "shared_factor",
-      "analyzer_flagged": true,
-      "reflection_status": "candidate"
+      "analyzer_flagged": false,
+      "reflection_status": "skipped",
+      "agent_version": "v3",
+      "eval_metrics": {
+        "latency_ms": 402,
+        "speed_score": 0.961,
+        "robustness_score": 1,
+        "tool_call_count": 3,
+        "tool_failure_count": 0,
+        "token_total": 0,
+        "token_prompt": 0,
+        "token_completion": 0,
+        "latency_flag": false,
+        "robustness_flag": false,
+        "drift_signals": [],
+        "task_success": true
+      }
     }
-  ]
+  ],
+  "scorecard": {
+    "type": "agent_version_scorecard",
+    "bucketing": "lesson_promotion_boundaries",
+    "note": "Buckets existing loop_eval metrics by the first usable-lesson promotion (v1 before, v2 promoting run, v3 after). No new instrumentation.",
+    "rows": [
+      {
+        "version": "v1",
+        "title": "Agent v1 — naive (pre-lesson)",
+        "boundary": "before first usable lesson promotion",
+        "run_count": 1,
+        "run_ids": ["demo-seen-a"],
+        "labels": ["seen_a"],
+        "task_success_rate": 0,
+        "avg_speed_score": 0.687,
+        "avg_robustness_score": 0.75,
+        "avg_latency_ms": 4543,
+        "avg_token_total": 0,
+        "avg_tool_failure_count": 1,
+        "drift_rate": 1,
+        "dominant_first_tool": "list_orders"
+      },
+      {
+        "version": "v2",
+        "title": "Agent v2 — promotion run",
+        "boundary": "run that promotes a usable lesson (evidence gate)",
+        "run_count": 1,
+        "run_ids": ["demo-seen-b"],
+        "labels": ["seen_b"],
+        "task_success_rate": 0,
+        "avg_speed_score": 0.943,
+        "avg_robustness_score": 0.75,
+        "avg_latency_ms": 606,
+        "avg_token_total": 0,
+        "avg_tool_failure_count": 1,
+        "drift_rate": 1,
+        "dominant_first_tool": "list_orders"
+      },
+      {
+        "version": "v3",
+        "title": "Agent v3 — post-lesson",
+        "boundary": "after promotion (lesson injectable / retrieved)",
+        "run_count": 1,
+        "run_ids": ["demo-unseen"],
+        "labels": ["unseen"],
+        "task_success_rate": 1,
+        "avg_speed_score": 0.961,
+        "avg_robustness_score": 1,
+        "avg_latency_ms": 402,
+        "avg_token_total": 0,
+        "avg_tool_failure_count": 0,
+        "drift_rate": 0,
+        "dominant_first_tool": "search_customers"
+      }
+    ],
+    "comparison": {
+      "v1": {
+        "title": "Agent v1 — naive (pre-lesson)",
+        "task_success_rate": 0,
+        "avg_speed_score": 0.687,
+        "avg_robustness_score": 0.75,
+        "avg_latency_ms": 4543,
+        "run_count": 1
+      },
+      "v2": {
+        "title": "Agent v2 — promotion run",
+        "task_success_rate": 0,
+        "avg_speed_score": 0.943,
+        "avg_robustness_score": 0.75,
+        "avg_latency_ms": 606,
+        "run_count": 1
+      },
+      "v3": {
+        "title": "Agent v3 — post-lesson",
+        "task_success_rate": 1,
+        "avg_speed_score": 0.961,
+        "avg_robustness_score": 1,
+        "avg_latency_ms": 402,
+        "run_count": 1
+      }
+    }
+  }
 }

@@ -290,6 +290,7 @@ async function runInlineOfflineDemo(res: ServerResponse): Promise<void> {
           type: "replay_trajectory",
           updated_at: new Date().toISOString(),
           rows: result.rows,
+          scorecard: result.scorecard ?? null,
         },
       })}\n\n`,
     );
@@ -426,16 +427,25 @@ function readTrajectory(): {
   updated_at: string | null;
   rows: TrajectoryRow[];
   path: string;
+  scorecard: unknown | null;
 } {
   const path = trajectoryPath();
   if (!existsSync(path)) {
-    return { empty: true, hint: HINT, updated_at: null, rows: [], path };
+    return {
+      empty: true,
+      hint: HINT,
+      updated_at: null,
+      rows: [],
+      path,
+      scorecard: null,
+    };
   }
   try {
     const text = readFileSync(path, "utf8").replace(/^\uFEFF/, "");
     const raw = JSON.parse(text) as {
       updated_at?: string;
       rows?: TrajectoryRow[];
+      scorecard?: unknown;
     };
     const rows = Array.isArray(raw.rows) ? raw.rows : [];
     if (rows.length === 0) {
@@ -445,6 +455,7 @@ function readTrajectory(): {
         updated_at: raw.updated_at ?? null,
         rows,
         path,
+        scorecard: raw.scorecard ?? null,
       };
     }
     return {
@@ -453,9 +464,17 @@ function readTrajectory(): {
       updated_at: raw.updated_at ?? null,
       rows,
       path,
+      scorecard: raw.scorecard ?? null,
     };
   } catch {
-    return { empty: true, hint: HINT, updated_at: null, rows: [], path };
+    return {
+      empty: true,
+      hint: HINT,
+      updated_at: null,
+      rows: [],
+      path,
+      scorecard: null,
+    };
   }
 }
 

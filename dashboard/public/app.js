@@ -1,4 +1,4 @@
-/* Loop demo dashboard — cyberpunk UI + live demo runner. */
+﻿/* Loop demo dashboard — cyberpunk UI + live demo runner. */
 
 const POLL_MS = 3000;
 const MAX_CONSOLE_LINES = 220;
@@ -171,20 +171,24 @@ function renderTrajectory(data) {
   const bar = keepTerminalBar(panel);
   if (!data || data.empty || !data.rows || data.rows.length === 0) {
     panel.innerHTML = bar + emptyHtml(data && data.hint);
+    renderScorecard(null);
     return;
   }
 
   const rows = data.rows
     .map((r) => {
       const ok = r.success;
+      const ver = r.agent_version || "—";
       return `<tr>
+        <td class="mono">${esc(ver)}</td>
         <td class="mono">${esc(r.label)}</td>
         <td><span class="badge ${ok ? "ok" : "bad"}">${ok ? "success" : "fail"}</span></td>
         <td class="mono">${esc(r.tool_call_count)}</td>
         <td class="mono">${esc(r.failed_tool_calls)}</td>
         <td class="mono">${esc(r.latency_ms)}</td>
+        <td class="mono">${esc(r.eval_metrics?.speed_score ?? "—")}</td>
+        <td class="mono">${esc(r.eval_metrics?.robustness_score ?? "—")}</td>
         <td class="mono">${esc(r.lessons_retrieved ?? "—")}</td>
-        <td class="mono">${esc(r.run_id)}</td>
         <td class="mono">${esc((r.tool_sequence || []).join(" → ") || "—")}</td>
       </tr>`;
     })
@@ -199,14 +203,74 @@ function renderTrajectory(data) {
     panelBody(`${updated}<div style="overflow-x:auto"><table>
     <thead>
       <tr>
+        <th>ver</th>
         <th>label</th>
         <th>success</th>
         <th>tools</th>
         <th>failed</th>
         <th>latency</th>
+        <th>speed</th>
+        <th>robust</th>
         <th>lessons</th>
-        <th>run_id</th>
         <th>sequence</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table></div>`);
+
+  renderScorecard(data.scorecard || null);
+}
+
+function renderScorecard(scorecard) {
+  const panel = el("scorecard-panel");
+  if (!panel) return;
+  const bar = keepTerminalBar(panel);
+  if (!scorecard || !scorecard.rows || scorecard.rows.length === 0) {
+    panel.innerHTML =
+      bar +
+      emptyHtml(
+        "Run offline replay:demo to fill Agent v1 → v2 → v3 (lesson-promotion buckets).",
+      );
+    return;
+  }
+
+  const rows = scorecard.rows
+    .map((r) => {
+      const hot = r.version === "v3" && r.task_success_rate >= 0.99;
+      return `<tr>
+        <td class="mono"><span class="badge ${hot ? "ok" : r.version === "v1" ? "bad" : "pending"}">${esc(r.version)}</span></td>
+        <td>${esc(r.title)}</td>
+        <td class="mono">${esc(r.run_count)}</td>
+        <td class="mono">${esc((r.task_success_rate * 100).toFixed(0))}%</td>
+        <td class="mono">${esc(r.avg_speed_score)}</td>
+        <td class="mono">${esc(r.avg_robustness_score)}</td>
+        <td class="mono">${esc(r.avg_latency_ms)}</td>
+        <td class="mono">${esc(r.avg_tool_failure_count)}</td>
+        <td class="mono">${esc(r.drift_rate)}</td>
+        <td class="mono">${esc(r.dominant_first_tool || "—")}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const note = scorecard.note
+    ? `<p class="meta mono"><span class="prompt">&gt;</span> ${esc(scorecard.note)}</p>`
+    : "";
+
+  panel.innerHTML =
+    bar +
+    panelBody(`${note}<div style="overflow-x:auto"><table>
+    <thead>
+      <tr>
+        <th>ver</th>
+        <th>agent</th>
+        <th>runs</th>
+        <th>task_success</th>
+        <th>speed</th>
+        <th>robust</th>
+        <th>lat_ms</th>
+        <th>fail_avg</th>
+        <th>drift</th>
+        <th>first_tool</th>
       </tr>
     </thead>
     <tbody>${rows}</tbody>
@@ -410,6 +474,7 @@ function handleSseBlock(block) {
           hint: null,
           updated_at: payload.trajectory.updated_at,
           rows: payload.trajectory.rows,
+          scorecard: payload.trajectory.scorecard || null,
         });
       }
       return;
