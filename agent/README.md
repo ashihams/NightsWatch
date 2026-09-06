@@ -1,12 +1,12 @@
-# Agent runtime (Steps 2–4)
+# Agent runtime (Steps 2–5)
 
-Minimal Node/TypeScript planner that calls the mock CRM webhooks from `tools/`, with Neatlogs OpenTelemetry tracing and a SQLite **working memory** store for the in-flight run.
+Minimal Node/TypeScript planner that calls the mock CRM webhooks from `tools/`, with Neatlogs OpenTelemetry tracing, SQLite **working memory** for the in-flight run, and SQLite **episodic vector memory** written after every run.
 
 ## AO session entrypoint
 
 **One planner run** is `runOnePlanner(task)` in `src/runPlanner.ts`.
 
-That function is the unit to wrap later as an AO session: input = natural-language task, output = tool-call trace + final message. No Neo4j / vector / episodic / reflection yet — keep the session boundary here.
+That function is the unit to wrap later as an AO session: input = natural-language task, output = tool-call trace + final message. No Neo4j / reflection / deterministic analyzer yet — keep the session boundary here.
 
 ```ts
 import { runOnePlanner } from "./runPlanner.js";
@@ -29,7 +29,7 @@ npm run tools
 
 ```bash
 npm install
-cp .env.example .env   # optional — leave TensorMux / Neatlogs blank for offline + no export
+cp .env.example .env   # optional — leave TensorMux / Neatlogs / embedding blank for offline
 npm run agent
 ```
 
@@ -51,9 +51,9 @@ One row per planner run in `working_runs` (path via `WORKING_DB_PATH`, default `
 | `started_at` | ISO timestamp |
 | `current_step` | Tool-call count so far |
 | `tool_call_log` | JSON append-only log of tool calls this run |
-| `injected_context` | JSON; empty `[]` for now (later phases) |
+| `injected_context` | JSON soft context (episodic hits; later: semantic lessons) |
 
-Lifecycle inside `runOnePlanner`: insert on start → append after each tool call → set status on end.
+Lifecycle inside `runOnePlanner`: insert on start → retrieve episodic soft context into `injected_context` (when no semantic lessons yet) → append after each tool call → set status on end → write episodic row.
 
 Inspect recent rows:
 
@@ -62,6 +62,36 @@ npm run working:list
 ```
 
 Requires Node with built-in `node:sqlite` (Node ≥ 22.5). The `data/` directory is gitignored.
+
+## Episodic memory (SQLite vectors)
+
+**Choice:** local SQLite table + JSON float embeddings + in-process cosine similarity. Fastest free-tier / zero-infra option for the hackathon — no Neo4j, Chroma, Pinecone, or paid vector host required.
+
+| Env | Purpose |
+|-----|---------|
+| `EPISODIC_DB_PATH` | SQLite path (default `./data/episodic.sqlite`) |
+| `EPISODIC_RETRIEVE_K` | Top-k nearest episodes to inject (default `3`) |
+| `EMBEDDING_BASE_URL` | Optional OpenAI-compatible embeddings base (`…/v1`) |
+| `EMBEDDING_API_KEY` | Optional embeddings API key |
+| `EMBEDDING_MODEL` | Optional model id (default `text-embedding-3-small`) |
+
+Each episode stores: `id`, `run_id`, `situation_summary` (short NL text that was embedded), `embedding`, `tool_sequence`, `success`, `tool_call_count`, `token_count` (0 for now), `latency_ms`, `created_at`.
+
+**Write path:** after every run ends (success or fail), unconditionally `writeEpisode(...)`.
+
+**Retrieval API:** `retrieveEpisodes(task, k=3)` embeds the new task and returns top-k nearest episodes by cosine similarity.
+
+**Run-start injection:** if `injected_context` has no `semantic_lesson` entries (none exist yet), query episodic memory and store the hits as soft context (`type: "episodic"`). Stdout logs `episodic_retrieve` / `episodic_inject` with retrieved `run_id`s and summaries.
+
+### Offline / no-embed-key path
+
+When `EMBEDDING_BASE_URL` + `EMBEDDING_API_KEY` are unset (or the API call fails), embeddings use a **deterministic bag-of-words hashing-trick** vector (`hash-bow-256`). Demos and CI work with zero paid embed APIs. Same text → same vector; overlapping tokens → higher similarity.
+
+Inspect episodes:
+
+```bash
+npm run episodic:list
+```
 
 ## Neatlogs observability
 
@@ -104,7 +134,7 @@ If either base URL or API key is missing, the runner uses a **deterministic offl
 
 ## Offline / naive behavior (intentional)
 
-The offline planner **calls `list_orders` before resolving `customer_id`**. That miss (HTTP 400 `missing_customer_id` or an unscoped order list) is the teaching signal for later learning — not a bug in this step. The miss is recorded in `tool_call_log`.
+The offline planner **calls `list_orders` before resolving `customer_id`**. That miss (HTTP 400 `missing_customer_id` or an unscoped order list) is the teaching signal for later learning — not a bug in this step. The miss is recorded in `tool_call_log` and in the episode's `tool_sequence` / `situation_summary`.
 
 Tool calls are logged to stdout as JSON lines: `name`, `args`, `status`, `ok`, `latency_ms`.
 
@@ -112,9 +142,12 @@ Tool calls are logged to stdout as JSON lines: `name`, `args`, `status`, `ok`, `
 
 | Path | Role |
 |------|------|
-| `src/runPlanner.ts` | `runOnePlanner` — AO-wrappable entrypoint + working-memory lifecycle |
+| `src/runPlanner.ts` | `runOnePlanner` — AO entrypoint + working + episodic lifecycle |
 | `src/workingMemory.ts` | SQLite `working_runs` store |
+| `src/episodicMemory.ts` | SQLite episodes + retrieve/write API |
+| `src/embeddings.ts` | Offline hash embeddings + optional API embeddings |
 | `src/listWorking.ts` | `npm run working:list` inspector |
+| `src/listEpisodic.ts` | `npm run episodic:list` inspector |
 | `src/index.ts` | CLI / `npm run agent` (inits Neatlogs first) |
 | `src/observability.ts` | Neatlogs init / graceful skip / span helpers |
 | `src/tools.ts` | Webhook client + TOOL spans + stdout logging |

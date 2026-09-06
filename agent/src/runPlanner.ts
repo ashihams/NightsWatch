@@ -5,6 +5,7 @@
  * single unit of "agent work" for a natural-language task.
  *
  * Working memory (SQLite): one row per run — start → append tool calls → complete|failed.
+ * Episodic memory (SQLite vectors): retrieve soft context at start; write episode on end.
  */
 
 import {
@@ -20,8 +21,17 @@ import { TOOL_NAMES, callTool, type ToolCallResult, type ToolName } from "./tool
 import {
   appendToolCall,
   finishWorkingRun,
+  getInjectedContext,
+  hasSemanticLessons,
+  setInjectedContext,
   startWorkingRun,
 } from "./workingMemory.js";
+import {
+  buildSituationSummary,
+  episodesToInjectedContext,
+  retrieveEpisodes,
+  writeEpisode,
+} from "./episodicMemory.js";
 
 export type PlannerRunResult = {
   task: string;
@@ -41,6 +51,87 @@ function maxSteps(): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 8;
 }
 
+function retrieveK(): number {
+  const n = Number(process.env.EPISODIC_RETRIEVE_K || 3);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3;
+}
+
+async function maybeInjectEpisodicContext(
+  runId: string,
+  task: string,
+): Promise<void> {
+  const existing = getInjectedContext(runId);
+  if (hasSemanticLessons(existing)) {
+    console.log(
+      JSON.stringify({
+        type: "episodic_skip",
+        run_id: runId,
+        reason: "injected_context already has semantic_lesson entries",
+      }),
+    );
+    return;
+  }
+
+  const matches = await retrieveEpisodes(task, retrieveK());
+  if (matches.length === 0) {
+    console.log(
+      JSON.stringify({
+        type: "episodic_inject",
+        run_id: runId,
+        injected: 0,
+        note: "no prior episodes yet",
+      }),
+    );
+    return;
+  }
+
+  const soft = episodesToInjectedContext(matches);
+  // Keep any non-lesson entries; replace prior episodic soft context.
+  const kept = existing.filter(
+    (item) =>
+      !(
+        item !== null &&
+        typeof item === "object" &&
+        (item as { type?: string }).type === "episodic"
+      ),
+  );
+  setInjectedContext(runId, [...kept, ...soft]);
+
+  console.log(
+    JSON.stringify({
+      type: "episodic_inject",
+      run_id: runId,
+      injected: soft.length,
+      retrieved_run_ids: soft.map((s) => s.run_id),
+      summaries: soft.map((s) => s.situation_summary),
+    }),
+  );
+}
+
+async function persistEpisode(params: {
+  runId: string;
+  task: string;
+  toolCalls: ToolCallResult[];
+  success: boolean;
+  latencyMs: number;
+}): Promise<void> {
+  const toolSequence = params.toolCalls.map((c) => c.name);
+  const situation = buildSituationSummary(
+    params.task,
+    toolSequence,
+    params.success,
+  );
+  await writeEpisode({
+    run_id: params.runId,
+    situation_summary: situation,
+    tool_sequence: toolSequence,
+    success: params.success,
+    tool_call_count: params.toolCalls.length,
+    token_count: 0,
+    latency_ms: params.latencyMs,
+  });
+}
+
 /**
  * Run a single planner loop for `task`.
  * Routes LLM planning through TensorMux when configured; otherwise offline naive planner.
@@ -54,6 +145,7 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
     const toolCalls: ToolCallResult[] = [];
     const history: LlmMessage[] = [];
     const limit = maxSteps();
+    const runStarted = Date.now();
     const runId = startWorkingRun(task);
 
     console.log(
@@ -65,6 +157,8 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
         max_steps: limit,
       }),
     );
+
+    await maybeInjectEpisodicContext(runId, task);
 
     let finalMessage = "";
     let runStatus: "complete" | "failed" = "complete";
@@ -111,6 +205,13 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
       }
 
       finishWorkingRun(runId, runStatus);
+      await persistEpisode({
+        runId,
+        task,
+        toolCalls,
+        success: runStatus === "complete",
+        latencyMs: Date.now() - runStarted,
+      });
 
       console.log(
         JSON.stringify({
@@ -133,6 +234,26 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
       };
     } catch (err) {
       finishWorkingRun(runId, "failed");
+      try {
+        await persistEpisode({
+          runId,
+          task,
+          toolCalls,
+          success: false,
+          latencyMs: Date.now() - runStarted,
+        });
+      } catch (persistErr) {
+        console.log(
+          JSON.stringify({
+            type: "episodic_write_error",
+            run_id: runId,
+            error:
+              persistErr instanceof Error
+                ? persistErr.message
+                : String(persistErr),
+          }),
+        );
+      }
       console.log(
         JSON.stringify({
           type: "planner_failed",
