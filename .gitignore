@@ -1,4 +1,6 @@
-﻿node_modules/
+node_modules/
+.venv/
+infra/tensormux/tensormux_requests.jsonl
 .env
 .env.*
 !.env.example
