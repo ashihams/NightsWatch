@@ -7,10 +7,11 @@
     "tools": "node tools/mock-server/index.js",
     "mock-server": "node tools/mock-server/index.js",
     "agent": "tsx agent/src/index.ts",
-    "agent:build": "tsc -p agent/tsconfig.json"
+    "agent:build": "tsc -p agent/tsconfig.json",
+    "working:list": "tsx agent/src/listWorking.ts"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.5"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

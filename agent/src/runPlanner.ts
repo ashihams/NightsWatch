@@ -3,6 +3,8 @@
  *
  * Wrap `runOnePlanner(task)` as an AO session later; keep this function the
  * single unit of "agent work" for a natural-language task.
+ *
+ * Working memory (SQLite): one row per run — start → append tool calls → complete|failed.
  */
 
 import {
@@ -15,10 +17,16 @@ import {
 import { offlinePlanNext } from "./offlinePlanner.js";
 import { withSpan } from "./observability.js";
 import { TOOL_NAMES, callTool, type ToolCallResult, type ToolName } from "./tools.js";
+import {
+  appendToolCall,
+  finishWorkingRun,
+  startWorkingRun,
+} from "./workingMemory.js";
 
 export type PlannerRunResult = {
   task: string;
   mode: "tensormux" | "offline";
+  runId: string;
   steps: number;
   toolCalls: ToolCallResult[];
   finalMessage: string;
@@ -46,10 +54,12 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
     const toolCalls: ToolCallResult[] = [];
     const history: LlmMessage[] = [];
     const limit = maxSteps();
+    const runId = startWorkingRun(task);
 
     console.log(
       JSON.stringify({
         type: "planner_start",
+        run_id: runId,
         task,
         mode,
         max_steps: limit,
@@ -57,60 +67,82 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
     );
 
     let finalMessage = "";
+    let runStatus: "complete" | "failed" = "complete";
 
-    for (let step = 0; step < limit; step++) {
-      const action =
-        mode === "tensormux"
-          ? await planNextStep(task, history)
-          : offlinePlanNext(task, toolCalls);
+    try {
+      for (let step = 0; step < limit; step++) {
+        const action =
+          mode === "tensormux"
+            ? await planNextStep(task, history)
+            : offlinePlanNext(task, toolCalls);
 
-      if (action.type === "finish") {
-        finalMessage = action.message;
-        break;
+        if (action.type === "finish") {
+          finalMessage = action.message;
+          break;
+        }
+
+        if (!isToolName(action.name)) {
+          finalMessage = `Unknown tool "${action.name}"; stopping.`;
+          runStatus = "failed";
+          break;
+        }
+
+        const callId = `call_${step + 1}`;
+        if (mode === "tensormux") {
+          history.push(assistantToolStub(action.name, action.args, callId));
+        }
+
+        const result = await callTool(action.name, action.args);
+        toolCalls.push(result);
+        appendToolCall(runId, result);
+
+        if (mode === "tensormux") {
+          history.push(
+            toolResultMessage(callId, {
+              status: result.status,
+              body: result.body,
+            }),
+          );
+        }
       }
 
-      if (!isToolName(action.name)) {
-        finalMessage = `Unknown tool "${action.name}"; stopping.`;
-        break;
+      if (!finalMessage) {
+        finalMessage = `Stopped after ${limit} steps.`;
       }
 
-      const callId = `call_${step + 1}`;
-      if (mode === "tensormux") {
-        history.push(assistantToolStub(action.name, action.args, callId));
-      }
+      finishWorkingRun(runId, runStatus);
 
-      const result = await callTool(action.name, action.args);
-      toolCalls.push(result);
+      console.log(
+        JSON.stringify({
+          type: "planner_done",
+          run_id: runId,
+          mode,
+          status: runStatus,
+          steps: toolCalls.length,
+          final_message: finalMessage,
+        }),
+      );
 
-      if (mode === "tensormux") {
-        history.push(
-          toolResultMessage(callId, {
-            status: result.status,
-            body: result.body,
-          }),
-        );
-      }
-    }
-
-    if (!finalMessage) {
-      finalMessage = `Stopped after ${limit} steps.`;
-    }
-
-    console.log(
-      JSON.stringify({
-        type: "planner_done",
+      return {
+        task,
         mode,
+        runId,
         steps: toolCalls.length,
-        final_message: finalMessage,
-      }),
-    );
-
-    return {
-      task,
-      mode,
-      steps: toolCalls.length,
-      toolCalls,
-      finalMessage,
-    };
+        toolCalls,
+        finalMessage,
+      };
+    } catch (err) {
+      finishWorkingRun(runId, "failed");
+      console.log(
+        JSON.stringify({
+          type: "planner_failed",
+          run_id: runId,
+          mode,
+          steps: toolCalls.length,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+      throw err;
+    }
   });
 }

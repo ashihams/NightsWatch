@@ -17,4 +17,4 @@ npm run tools
 npm run agent
 ```
 
-See `tools/README.md` for webhook contracts and `agent/README.md` for the planner, AO entrypoint, and Neatlogs setup.
+See `tools/README.md` for webhook contracts and `agent/README.md` for the planner, AO entrypoint, Neatlogs, and SQLite working memory (`npm run working:list`).
