@@ -115,6 +115,42 @@ export function finishWorkingRun(
     .run(status, runId);
 }
 
+/** Replace injected_context JSON for a run (episodic soft context, later lessons). */
+export function setInjectedContext(
+  runId: string,
+  context: unknown[],
+): void {
+  getDb()
+    .prepare(`UPDATE working_runs SET injected_context = ? WHERE run_id = ?`)
+    .run(JSON.stringify(context), runId);
+}
+
+/** Read injected_context for a run. */
+export function getInjectedContext(runId: string): unknown[] {
+  const row = getDb()
+    .prepare(`SELECT injected_context FROM working_runs WHERE run_id = ?`)
+    .get(runId) as { injected_context: string } | undefined;
+  if (!row) {
+    throw new Error(`working_runs row not found: ${runId}`);
+  }
+  const parsed = JSON.parse(String(row.injected_context || "[]"));
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+/**
+ * True when injected_context already has semantic lessons (reflection phase).
+ * Until that phase exists, this is always false → episodic retrieval runs.
+ */
+export function hasSemanticLessons(context: unknown): boolean {
+  if (!Array.isArray(context)) return false;
+  return context.some(
+    (item) =>
+      item !== null &&
+      typeof item === "object" &&
+      (item as { type?: string }).type === "semantic_lesson",
+  );
+}
+
 /** Recent runs newest-first (for inspect script). */
 export function listWorkingRuns(limit = 20): WorkingRunRow[] {
   const rows = getDb()

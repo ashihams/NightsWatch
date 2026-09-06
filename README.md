@@ -15,6 +15,13 @@ npm run tools
 
 # Terminal 2 — one planner run (offline if TensorMux env unset)
 npm run agent
+
+# Second run should retrieve the first episode (stdout: episodic_retrieve / episodic_inject)
+npm run agent
+
+# Inspect stores
+npm run working:list
+npm run episodic:list
 ```
 
-See `tools/README.md` for webhook contracts and `agent/README.md` for the planner, AO entrypoint, Neatlogs, and SQLite working memory (`npm run working:list`).
+See `tools/README.md` for webhook contracts and `agent/README.md` for the planner, AO entrypoint, Neatlogs, SQLite working memory, and episodic vector memory.

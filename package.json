@@ -8,7 +8,8 @@
     "mock-server": "node tools/mock-server/index.js",
     "agent": "tsx agent/src/index.ts",
     "agent:build": "tsc -p agent/tsconfig.json",
-    "working:list": "tsx agent/src/listWorking.ts"
+    "working:list": "tsx agent/src/listWorking.ts",
+    "episodic:list": "tsx agent/src/listEpisodic.ts"
   },
   "engines": {
     "node": ">=22.5"
