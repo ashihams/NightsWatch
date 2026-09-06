@@ -1,12 +1,12 @@
-# Agent runtime (Steps 2–5)
+# Agent runtime (Steps 2–6)
 
-Minimal Node/TypeScript planner that calls the mock CRM webhooks from `tools/`, with Neatlogs OpenTelemetry tracing, SQLite **working memory** for the in-flight run, and SQLite **episodic vector memory** written after every run.
+Minimal Node/TypeScript planner that calls the mock CRM webhooks from `tools/`, with Neatlogs OpenTelemetry tracing, SQLite **working memory** for the in-flight run, SQLite **episodic vector memory** written after every run, and a **deterministic post-run analyzer** that gates reflection (no reflection LLM yet).
 
 ## AO session entrypoint
 
 **One planner run** is `runOnePlanner(task)` in `src/runPlanner.ts`.
 
-That function is the unit to wrap later as an AO session: input = natural-language task, output = tool-call trace + final message. No Neo4j / reflection / deterministic analyzer yet — keep the session boundary here.
+That function is the unit to wrap later as an AO session: input = natural-language task, output = tool-call trace + final message + analyzer verdict. No Neo4j / reflection LLM yet — if the analyzer flags the run, a local `pending_reflection` JSON file is written for Step 7.
 
 ```ts
 import { runOnePlanner } from "./runPlanner.js";
@@ -14,6 +14,7 @@ import { runOnePlanner } from "./runPlanner.js";
 const result = await runOnePlanner(
   "Find orders for Jordan Lee and open a support ticket about late shipment",
 );
+// result.analysis?.flagged, result.analysis?.triggers
 ```
 
 ## Prerequisites
@@ -39,6 +40,59 @@ Custom task:
 npm run agent -- "Find orders for Sam Rivera"
 ```
 
+## Deterministic analyzer (Step 6)
+
+After every completed (or failed) run, `runOnePlanner` always calls the pure function `analyzeRun` (via `analyzeCompletedRun`). **No reflection LLM** and **no Neo4j writes** in this step.
+
+### Return shape
+
+```ts
+analyzeRun(input) → {
+  flagged: boolean,
+  triggers: string[],   // which fixed conditions fired
+  evidence: object      // structured details per trigger
+}
+```
+
+### Fixed triggers (flag if any are true)
+
+| Trigger | Condition |
+|---------|-----------|
+| `tool_failure` | Non-2xx status, `ok: false`, or explicit error body |
+| `retry` | Same tool called again after an earlier failure in the run |
+| `duplicate_tool_call` | Same tool + same effective inputs more than once |
+| `high_latency` | Run latency ≫ median of prior similar episodes (skipped if no baseline) |
+| `novel_tool_sequence` | Successful tool sequence not seen in prior successful episodes (skipped if no prior success history) |
+
+### Data paths (same triggers)
+
+1. **Neatlogs (preferred)** — when `NEATLOGS_API_KEY` is set, the loader calls the Neatlogs MCP session/trace API (`search_traces` → `get_trace_context`) on `{NEATLOGS_ENDPOINT}/mcp` (or `NEATLOGS_MCP_URL`) and maps TOOL spans into normalized tool calls.
+2. **Working memory (fallback)** — if Neatlogs is unset or the read fails/empty, use `working_runs.tool_call_log` for that `run_id`, then the in-memory tool results from the just-finished planner loop.
+
+Stdout logs `analyzer_neatlogs_ok` / `analyzer_neatlogs_skip` / `analyzer_source`, then always `analyzer_result` with `flagged` + `triggers`.
+
+### Pending reflection (Step 7 input)
+
+If `flagged === true`, write:
+
+`{PENDING_REFLECTION_DIR}/{run_id}.json` (default `./data/pending_reflection/`)
+
+with `status: "pending"`, triggers, and evidence. Step 7 will consume these — do not implement reflection LLM here.
+
+### Prove flagged vs clean
+
+```bash
+# Pure-function proof (no tools server required)
+npm run analyzer:prove
+# → naive_list_orders_miss: flagged=true (tool_failure, retry, duplicate_tool_call)
+# → clean_run: flagged=false
+
+# Live offline agent (intentional list_orders miss) — needs npm run tools
+npm run agent
+# → analyzer_result flagged=true with tool_failure (+ often retry)
+# → pending_reflection JSON written under data/pending_reflection/
+```
+
 ## Working memory (SQLite)
 
 One row per planner run in `working_runs` (path via `WORKING_DB_PATH`, default `./data/working.sqlite`):
@@ -53,7 +107,7 @@ One row per planner run in `working_runs` (path via `WORKING_DB_PATH`, default `
 | `tool_call_log` | JSON append-only log of tool calls this run |
 | `injected_context` | JSON soft context (episodic hits; later: semantic lessons) |
 
-Lifecycle inside `runOnePlanner`: insert on start → retrieve episodic soft context into `injected_context` (when no semantic lessons yet) → append after each tool call → set status on end → write episodic row.
+Lifecycle inside `runOnePlanner`: insert on start → retrieve episodic soft context into `injected_context` (when no semantic lessons yet) → append after each tool call → set status on end → write episodic row → **run analyzer** → maybe write `pending_reflection`.
 
 Inspect recent rows:
 
@@ -99,11 +153,12 @@ Init happens once in `src/observability.ts`, called at the very start of `src/in
 
 | Env | Purpose |
 |-----|---------|
-| `NEATLOGS_API_KEY` | Project API key from [app.neatlogs.com](https://app.neatlogs.com). Required to export traces. |
+| `NEATLOGS_API_KEY` | Project API key from [app.neatlogs.com](https://app.neatlogs.com). Required to export traces **and** preferred for analyzer reads. |
 | `NEATLOGS_ENDPOINT` | Optional ingest base URL (default `https://ingest.neatlogs.com`) |
-| `NEATLOGS_WORKFLOW_NAME` | Optional workflow label in the dashboard (default `support-agent-planner`) |
+| `NEATLOGS_MCP_URL` | Optional MCP URL for analyzer reads (default `{endpoint}/mcp`) |
+| `NEATLOGS_WORKFLOW_NAME` | Optional workflow label in the dashboard (default `nights-watch-agent`) |
 
-**Missing key:** stdout shows `[neatlogs] NEATLOGS_API_KEY missing — tracing disabled…` and the agent continues.
+**Missing key:** stdout shows `[neatlogs] NEATLOGS_API_KEY missing — tracing disabled…` and the agent continues; analyzer uses working memory.
 
 **With key:** stdout shows `[neatlogs] init ok — …`. Spans emitted:
 
@@ -116,7 +171,7 @@ Init happens once in `src/observability.ts`, called at the very start of `src/in
 1. Set `NEATLOGS_API_KEY` in `.env` and run `npm run agent` (with `npm run tools` up).
 2. Open [https://app.neatlogs.com](https://app.neatlogs.com).
 3. Open the project that owns your API key.
-4. Filter or search workflows by `support-agent-planner` (or your `NEATLOGS_WORKFLOW_NAME`).
+4. Filter or search workflows by `nights-watch-agent` (or your `NEATLOGS_WORKFLOW_NAME`).
 5. Open the newest trace — you should see the agent root with nested tool (and LLM, on the TensorMux path) spans.
 6. Session grouping follows Neatlogs defaults: a single CLI run is one trace/session unless you set an explicit session id later.
 
@@ -134,7 +189,7 @@ If either base URL or API key is missing, the runner uses a **deterministic offl
 
 ## Offline / naive behavior (intentional)
 
-The offline planner **calls `list_orders` before resolving `customer_id`**. That miss (HTTP 400 `missing_customer_id` or an unscoped order list) is the teaching signal for later learning — not a bug in this step. The miss is recorded in `tool_call_log` and in the episode's `tool_sequence` / `situation_summary`.
+The offline planner **calls `list_orders` before resolving `customer_id`**. That miss (HTTP 400 `missing_customer_id` or an unscoped order list) is the teaching signal for later learning — not a bug in this step. The miss is recorded in `tool_call_log` and in the episode's `tool_sequence` / `situation_summary`. The analyzer typically flags `tool_failure` and `retry` on this path.
 
 Tool calls are logged to stdout as JSON lines: `name`, `args`, `status`, `ok`, `latency_ms`.
 
@@ -142,7 +197,12 @@ Tool calls are logged to stdout as JSON lines: `name`, `args`, `status`, `ok`, `
 
 | Path | Role |
 |------|------|
-| `src/runPlanner.ts` | `runOnePlanner` — AO entrypoint + working + episodic lifecycle |
+| `src/runPlanner.ts` | `runOnePlanner` — AO entrypoint + working + episodic + analyzer |
+| `src/analyzer.ts` | Pure `analyzeRun` — fixed triggers, no I/O |
+| `src/analyzeCompletedRun.ts` | Neatlogs-or-working-memory loader → `analyzeRun` |
+| `src/neatlogsSession.ts` | MCP session/trace read for analyzer |
+| `src/pendingReflection.ts` | Local `pending_reflection` JSON for Step 7 |
+| `src/proveAnalyzer.ts` | `npm run analyzer:prove` — flagged vs clean |
 | `src/workingMemory.ts` | SQLite `working_runs` store |
 | `src/episodicMemory.ts` | SQLite episodes + retrieve/write API |
 | `src/embeddings.ts` | Offline hash embeddings + optional API embeddings |

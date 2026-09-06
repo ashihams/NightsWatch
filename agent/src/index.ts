@@ -37,6 +37,12 @@ async function main(): Promise<void> {
     }
     console.log(`final: ${result.finalMessage}`);
 
+    if (result.analysis) {
+      console.log(
+        `\nanalyzer: flagged=${result.analysis.flagged} source=${result.analysisSource ?? "?"} triggers=${JSON.stringify(result.analysis.triggers)}`,
+      );
+    }
+
     const provedListOrdersMiss = result.toolCalls.some(
       (c) =>
         c.name === "list_orders" &&

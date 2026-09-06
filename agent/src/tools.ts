@@ -52,8 +52,16 @@ export async function callTool(
       } catch {
         body = { raw: text };
       }
+      // Unscoped / teaching-miss responses are HTTP 200 but not usable — treat as not-ok
+      // so working-memory logs and the analyzer see the intentional list_orders miss.
+      const unscopedMiss =
+        body &&
+        typeof body === "object" &&
+        ((body as { unscoped?: boolean }).unscoped === true ||
+          (body as { error?: string }).error === "missing_customer_id");
       ok =
         res.ok &&
+        !unscopedMiss &&
         !(body && typeof body === "object" && (body as { ok?: boolean }).ok === false);
     } catch (err) {
       status = 0;

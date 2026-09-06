@@ -6,6 +6,7 @@
  *
  * Working memory (SQLite): one row per run — start → append tool calls → complete|failed.
  * Episodic memory (SQLite vectors): retrieve soft context at start; write episode on end.
+ * Post-run: deterministic analyzer (no reflection LLM); pending_reflection if flagged.
  */
 
 import {
@@ -16,7 +17,7 @@ import {
   type LlmMessage,
 } from "./llm.js";
 import { offlinePlanNext } from "./offlinePlanner.js";
-import { withSpan } from "./observability.js";
+import { flushObservability, withPlannerWorkflow } from "./observability.js";
 import { TOOL_NAMES, callTool, type ToolCallResult, type ToolName } from "./tools.js";
 import {
   appendToolCall,
@@ -32,6 +33,9 @@ import {
   retrieveEpisodes,
   writeEpisode,
 } from "./episodicMemory.js";
+import { analyzeCompletedRun } from "./analyzeCompletedRun.js";
+import { writePendingReflection } from "./pendingReflection.js";
+import type { AnalyzeRunResult } from "./analyzer.js";
 
 export type PlannerRunResult = {
   task: string;
@@ -40,6 +44,8 @@ export type PlannerRunResult = {
   steps: number;
   toolCalls: ToolCallResult[];
   finalMessage: string;
+  analysis?: AnalyzeRunResult;
+  analysisSource?: "neatlogs" | "working_memory";
 };
 
 function isToolName(name: string): name is ToolName {
@@ -133,37 +139,103 @@ async function persistEpisode(params: {
 }
 
 /**
+ * Always run the deterministic analyzer after a run ends.
+ * If flagged, write pending_reflection for Step 7 — do NOT call reflection LLM.
+ */
+async function runPostAnalyzer(params: {
+  runId: string;
+  task: string;
+  toolCalls: ToolCallResult[];
+  latencyMs: number;
+  success: boolean;
+  mode: string;
+  finalMessage: string;
+}): Promise<{
+  analysis: AnalyzeRunResult;
+  source: "neatlogs" | "working_memory";
+}> {
+  const { analysis, source } = await analyzeCompletedRun({
+    runId: params.runId,
+    task: params.task,
+    toolCalls: params.toolCalls,
+    latencyMs: params.latencyMs,
+    success: params.success,
+  });
+
+  console.log(
+    JSON.stringify({
+      type: "analyzer_result",
+      run_id: params.runId,
+      source,
+      flagged: analysis.flagged,
+      triggers: analysis.triggers,
+      evidence_keys: Object.keys(analysis.evidence),
+    }),
+  );
+
+  if (analysis.flagged) {
+    const path = writePendingReflection({
+      runId: params.runId,
+      task: params.task,
+      source,
+      analysis,
+      mode: params.mode,
+      finalMessage: params.finalMessage,
+    });
+    console.log(
+      JSON.stringify({
+        type: "pending_reflection",
+        run_id: params.runId,
+        path,
+        triggers: analysis.triggers,
+        note: "reflection LLM deferred to Step 7",
+      }),
+    );
+  }
+
+  return { analysis, source };
+}
+
+/**
  * Run a single planner loop for `task`.
  * Routes LLM planning through TensorMux when configured; otherwise offline naive planner.
  *
- * This is the AO-session entrypoint — wrap later as an AO session; keep the boundary here.
+ * Trace lifecycle: WORKFLOW root ends → flush → MCP analyzer read-back.
+ * Analyzer must NOT run inside the open WORKFLOW span.
  */
 export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
-  // WORKFLOW root groups LLM + tool spans for one planner invocation
-  return withSpan({ kind: "WORKFLOW", name: "runOnePlanner" }, async () => {
-    const mode = tensormuxConfigured() ? "tensormux" : "offline";
-    const toolCalls: ToolCallResult[] = [];
-    const history: LlmMessage[] = [];
-    const limit = maxSteps();
-    const runStarted = Date.now();
-    const runId = startWorkingRun(task);
+  const mode = tensormuxConfigured() ? "tensormux" : "offline";
+  const toolCalls: ToolCallResult[] = [];
+  const history: LlmMessage[] = [];
+  const limit = maxSteps();
+  const runStarted = Date.now();
+  const runId = startWorkingRun(task);
 
-    console.log(
-      JSON.stringify({
-        type: "planner_start",
-        run_id: runId,
-        task,
-        mode,
-        max_steps: limit,
-      }),
-    );
+  console.log(
+    JSON.stringify({
+      type: "planner_start",
+      run_id: runId,
+      task,
+      mode,
+      max_steps: limit,
+    }),
+  );
 
-    await maybeInjectEpisodicContext(runId, task);
+  type CoreResult = {
+    finalMessage: string;
+    runStatus: "complete" | "failed";
+    latencyMs: number;
+  };
 
-    let finalMessage = "";
-    let runStatus: "complete" | "failed" = "complete";
+  let core: CoreResult;
 
-    try {
+  try {
+    core = await withPlannerWorkflow({ runId, task, mode }, async () => {
+      await maybeInjectEpisodicContext(runId, task);
+
+      let finalMessage = "";
+      let runStatus: "complete" | "failed" = "complete";
+
       for (let step = 0; step < limit; step++) {
         const action =
           mode === "tensormux"
@@ -205,65 +277,110 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
       }
 
       finishWorkingRun(runId, runStatus);
+      const latencyMs = Date.now() - runStarted;
       await persistEpisode({
         runId,
         task,
         toolCalls,
         success: runStatus === "complete",
-        latencyMs: Date.now() - runStarted,
+        latencyMs,
       });
 
-      console.log(
-        JSON.stringify({
-          type: "planner_done",
-          run_id: runId,
-          mode,
-          status: runStatus,
-          steps: toolCalls.length,
-          final_message: finalMessage,
-        }),
-      );
-
-      return {
-        task,
-        mode,
+      return { finalMessage, runStatus, latencyMs };
+    });
+  } catch (err) {
+    finishWorkingRun(runId, "failed");
+    const latencyMs = Date.now() - runStarted;
+    try {
+      await persistEpisode({
         runId,
-        steps: toolCalls.length,
+        task,
         toolCalls,
-        finalMessage,
-      };
-    } catch (err) {
-      finishWorkingRun(runId, "failed");
-      try {
-        await persistEpisode({
-          runId,
-          task,
-          toolCalls,
-          success: false,
-          latencyMs: Date.now() - runStarted,
-        });
-      } catch (persistErr) {
-        console.log(
-          JSON.stringify({
-            type: "episodic_write_error",
-            run_id: runId,
-            error:
-              persistErr instanceof Error
-                ? persistErr.message
-                : String(persistErr),
-          }),
-        );
-      }
+        success: false,
+        latencyMs,
+      });
+    } catch (persistErr) {
       console.log(
         JSON.stringify({
-          type: "planner_failed",
+          type: "episodic_write_error",
           run_id: runId,
-          mode,
-          steps: toolCalls.length,
-          error: err instanceof Error ? err.message : String(err),
+          error:
+            persistErr instanceof Error
+              ? persistErr.message
+              : String(persistErr),
         }),
       );
-      throw err;
     }
+    await flushObservability();
+    try {
+      await runPostAnalyzer({
+        runId,
+        task,
+        toolCalls,
+        latencyMs,
+        success: false,
+        mode,
+        finalMessage: err instanceof Error ? err.message : String(err),
+      });
+    } catch (analyzeErr) {
+      console.log(
+        JSON.stringify({
+          type: "analyzer_error",
+          run_id: runId,
+          error:
+            analyzeErr instanceof Error
+              ? analyzeErr.message
+              : String(analyzeErr),
+        }),
+      );
+    }
+    console.log(
+      JSON.stringify({
+        type: "planner_failed",
+        run_id: runId,
+        mode,
+        steps: toolCalls.length,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+    throw err;
+  }
+
+  await flushObservability();
+
+  const { analysis, source: analysisSource } = await runPostAnalyzer({
+    runId,
+    task,
+    toolCalls,
+    latencyMs: core.latencyMs,
+    success: core.runStatus === "complete",
+    mode,
+    finalMessage: core.finalMessage,
   });
+
+  console.log(
+    JSON.stringify({
+      type: "planner_done",
+      run_id: runId,
+      mode,
+      status: core.runStatus,
+      steps: toolCalls.length,
+      final_message: core.finalMessage,
+      analyzer_flagged: analysis.flagged,
+      analyzer_triggers: analysis.triggers,
+      analyzer_source: analysisSource,
+    }),
+  );
+
+  return {
+    task,
+    mode,
+    runId,
+    steps: toolCalls.length,
+    toolCalls,
+    finalMessage: core.finalMessage,
+    analysis,
+    analysisSource,
+  };
 }
+
