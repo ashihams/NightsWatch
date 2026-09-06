@@ -1,12 +1,12 @@
-# Agent runtime (Step 2 + Neatlogs observability)
+# Agent runtime (Steps 2–4)
 
-Minimal Node/TypeScript planner that calls the mock CRM webhooks from `tools/`, with Neatlogs OpenTelemetry tracing for agent / LLM / tool spans.
+Minimal Node/TypeScript planner that calls the mock CRM webhooks from `tools/`, with Neatlogs OpenTelemetry tracing and a SQLite **working memory** store for the in-flight run.
 
 ## AO session entrypoint
 
 **One planner run** is `runOnePlanner(task)` in `src/runPlanner.ts`.
 
-That function is the unit to wrap later as an AO session: input = natural-language task, output = tool-call trace + final message. No Neo4j / vector memory / reflection yet — keep the session boundary here.
+That function is the unit to wrap later as an AO session: input = natural-language task, output = tool-call trace + final message. No Neo4j / vector / episodic / reflection yet — keep the session boundary here.
 
 ```ts
 import { runOnePlanner } from "./runPlanner.js";
@@ -38,6 +38,30 @@ Custom task:
 ```bash
 npm run agent -- "Find orders for Sam Rivera"
 ```
+
+## Working memory (SQLite)
+
+One row per planner run in `working_runs` (path via `WORKING_DB_PATH`, default `./data/working.sqlite`):
+
+| Column | Role |
+|--------|------|
+| `run_id` | Primary key |
+| `task_description` | Natural-language task |
+| `status` | `in_progress` → `complete` \| `failed` |
+| `started_at` | ISO timestamp |
+| `current_step` | Tool-call count so far |
+| `tool_call_log` | JSON append-only log of tool calls this run |
+| `injected_context` | JSON; empty `[]` for now (later phases) |
+
+Lifecycle inside `runOnePlanner`: insert on start → append after each tool call → set status on end.
+
+Inspect recent rows:
+
+```bash
+npm run working:list
+```
+
+Requires Node with built-in `node:sqlite` (Node ≥ 22.5). The `data/` directory is gitignored.
 
 ## Neatlogs observability
 
@@ -80,7 +104,7 @@ If either base URL or API key is missing, the runner uses a **deterministic offl
 
 ## Offline / naive behavior (intentional)
 
-The offline planner **calls `list_orders` before resolving `customer_id`**. That miss (HTTP 400 `missing_customer_id` or an unscoped order list) is the teaching signal for later learning — not a bug in this step.
+The offline planner **calls `list_orders` before resolving `customer_id`**. That miss (HTTP 400 `missing_customer_id` or an unscoped order list) is the teaching signal for later learning — not a bug in this step. The miss is recorded in `tool_call_log`.
 
 Tool calls are logged to stdout as JSON lines: `name`, `args`, `status`, `ok`, `latency_ms`.
 
@@ -88,7 +112,9 @@ Tool calls are logged to stdout as JSON lines: `name`, `args`, `status`, `ok`, `
 
 | Path | Role |
 |------|------|
-| `src/runPlanner.ts` | `runOnePlanner` — AO-wrappable entrypoint |
+| `src/runPlanner.ts` | `runOnePlanner` — AO-wrappable entrypoint + working-memory lifecycle |
+| `src/workingMemory.ts` | SQLite `working_runs` store |
+| `src/listWorking.ts` | `npm run working:list` inspector |
 | `src/index.ts` | CLI / `npm run agent` (inits Neatlogs first) |
 | `src/observability.ts` | Neatlogs init / graceful skip / span helpers |
 | `src/tools.ts` | Webhook client + TOOL spans + stdout logging |

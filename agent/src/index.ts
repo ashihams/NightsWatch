@@ -27,6 +27,7 @@ async function main(): Promise<void> {
     const result = await runOnePlanner(task);
 
     console.log("\n--- summary ---");
+    console.log(`run_id: ${result.runId}`);
     console.log(`mode: ${result.mode}`);
     console.log(`tool calls: ${result.steps}`);
     for (const c of result.toolCalls) {
