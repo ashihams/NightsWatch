@@ -5,9 +5,30 @@
   "description": "Nights Watch — agent that learns third-party tools over repeated runs",
   "scripts": {
     "tools": "node tools/mock-server/index.js",
-    "mock-server": "node tools/mock-server/index.js"
+    "mock-server": "node tools/mock-server/index.js",
+    "agent": "tsx agent/src/index.ts",
+    "agent:build": "tsc -p agent/tsconfig.json",
+    "working:list": "tsx agent/src/listWorking.ts",
+    "episodic:list": "tsx agent/src/listEpisodic.ts",
+    "analyzer:prove": "tsx agent/src/proveAnalyzer.ts",
+    "reflection:prove": "tsx agent/src/proveReflection.ts",
+    "strategy:prove": "tsx agent/src/proveStrategy.ts",
+    "memory:lessons": "tsx agent/src/listLessons.ts",
+    "neo4j:lessons": "tsx agent/src/listLessons.ts",
+    "replay:demo": "tsx scripts/replay-demo.ts"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.5"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "neatlogs": "^1.1.19",
+    "neo4j-driver": "^5.28.3",
+    "openai": "^4.86.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
   }
 }
