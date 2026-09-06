@@ -1,0 +1,24 @@
+{
+  "name": "nights-watch-ao",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Nights Watch — agent that learns third-party tools over repeated runs",
+  "scripts": {
+    "tools": "node tools/mock-server/index.js",
+    "mock-server": "node tools/mock-server/index.js",
+    "agent": "tsx agent/src/index.ts",
+    "agent:build": "tsc -p agent/tsconfig.json"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "openai": "^4.86.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}
