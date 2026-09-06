@@ -17,7 +17,10 @@
     "neo4j:lessons": "tsx agent/src/listLessons.ts",
     "replay:demo": "tsx scripts/replay-demo.ts",
     "dashboard": "tsx dashboard/server.ts",
-    "dev:dashboard": "tsx dashboard/server.ts"
+    "dev:dashboard": "tsx dashboard/server.ts",
+    "n8n:up": "docker compose -f infra/n8n/docker-compose.yml up -d",
+    "n8n:down": "docker compose -f infra/n8n/docker-compose.yml down",
+    "n8n:import": "powershell -NoProfile -ExecutionPolicy Bypass -File infra/n8n/import-workflows.ps1"
   },
   "engines": {
     "node": ">=22.5"
