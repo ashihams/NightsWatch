@@ -49,6 +49,24 @@ All LLM calls go through TensorMux (OpenAI-compatible chat completions).
 | `TENSORMUX_API_KEY` | API key |
 | `TENSORMUX_MODEL` | Model id (default `gpt-4o-mini`) |
 
+**Local gateway (this repo):** `infra/tensormux/` — Ollama backend on `:11434`, TensorMux on `:8090` (avoids SigNoz on `:8080`).
+
+```powershell
+# once: ollama pull qwen2.5:1.5b
+cd infra/tensormux
+python -m venv .venv
+.\.venv\Scripts\pip install "git+https://github.com/KrxGu/Tensormux.git"
+.\start.ps1
+```
+
+Then in `.env`:
+
+```env
+TENSORMUX_BASE_URL=http://127.0.0.1:8090/v1
+TENSORMUX_API_KEY=local-dev
+TENSORMUX_MODEL=qwen2.5:1.5b
+```
+
 If either base URL or API key is missing, the runner uses a **deterministic offline planner** that still POSTs to the webhooks so demos work without credentials.
 
 ## Offline / naive behavior (intentional)
