@@ -284,18 +284,41 @@ function evaluateImprovement(rows: TrajectoryRow[]): ImprovementSignal[] {
   ];
 }
 
-async function prepareDemoStores(): Promise<void> {
-  // Isolate demo SQLite / lesson files under data/replay-demo/
+export type ReplayDemoResult = {
+  ok: boolean;
+  rows: TrajectoryRow[];
+  trajectory_path: string;
+  signals: ImprovementSignal[];
+  exit_code: number;
+};
+
+export type RunReplayDemoOptions = {
+  /** Force offline planner + hash embeddings (Vercel / no localhost deps). */
+  forceOffline?: boolean;
+  onLog?: (line: string, stream: "stdout" | "stderr") => void;
+};
+
+function applyDataRoots(): void {
+  const root =
+    process.env.REPLAY_DATA_ROOT ||
+    (process.env.VERCEL ? "/tmp/loop-replay-demo" : "./data/replay-demo");
+
   process.env.WORKING_DB_PATH =
-    process.env.REPLAY_WORKING_DB_PATH || "./data/replay-demo/working.sqlite";
+    process.env.REPLAY_WORKING_DB_PATH || `${root}/working.sqlite`;
   process.env.EPISODIC_DB_PATH =
-    process.env.REPLAY_EPISODIC_DB_PATH || "./data/replay-demo/episodic.sqlite";
+    process.env.REPLAY_EPISODIC_DB_PATH || `${root}/episodic.sqlite`;
   process.env.SEMANTIC_FALLBACK_PATH =
     process.env.REPLAY_SEMANTIC_FALLBACK_PATH ||
-    "./data/replay-demo/semantic_lessons.json";
+    `${root}/semantic_lessons.json`;
   process.env.PENDING_REFLECTION_DIR =
     process.env.REPLAY_PENDING_REFLECTION_DIR ||
-    "./data/replay-demo/pending_reflection";
+    `${root}/pending_reflection`;
+  process.env.REPLAY_TRAJECTORY_PATH =
+    process.env.REPLAY_TRAJECTORY_PATH || `${root}/trajectory.json`;
+}
+
+async function prepareDemoStores(forceOffline = false): Promise<boolean> {
+  applyDataRoots();
 
   // Strategy on for the full trajectory (seen runs teach; unseen retrieves).
   process.env.STRATEGY_INJECTION = process.env.STRATEGY_INJECTION || "1";
@@ -305,14 +328,18 @@ async function prepareDemoStores(): Promise<void> {
     process.env.STRATEGY_MIN_CONFIDENCE = "0.95";
   }
 
-  // Offline planner only when REPLAY_USE_OFFLINE=1.
-  // Default 0: keep TensorMux + Neatlogs for live demo runs.
-  const useOffline = /^(1|true|yes|on)$/i.test(
-    process.env.REPLAY_USE_OFFLINE || "0",
-  );
+  // Offline planner only when REPLAY_USE_OFFLINE=1 (or forceOffline for Vercel).
+  const useOffline =
+    forceOffline ||
+    /^(1|true|yes|on)$/i.test(process.env.REPLAY_USE_OFFLINE || "0");
   if (useOffline) {
+    process.env.REPLAY_USE_OFFLINE = "1";
     process.env.TENSORMUX_BASE_URL = "";
     process.env.TENSORMUX_API_KEY = "";
+    // Hash-bow embeddings — no Ollama/localhost on serverless.
+    process.env.EMBEDDING_BASE_URL = "";
+    process.env.EMBEDDING_API_KEY = "";
+    process.env.OLLAMA_BASE_URL = "";
   }
 
   const neatlogsOn = Boolean((process.env.NEATLOGS_API_KEY || "").trim());
@@ -334,6 +361,7 @@ async function prepareDemoStores(): Promise<void> {
       ),
     }),
   );
+  return useOffline;
 }
 
 async function pingTools(): Promise<void> {
@@ -359,130 +387,202 @@ async function pingTools(): Promise<void> {
   }
 }
 
-async function main(): Promise<void> {
-  await prepareDemoStores();
-  await pingTools();
-  await initObservability();
+/**
+ * Run the seen_a → seen_b → unseen spine. Safe to call from the dashboard
+ * (local spawn or Vercel in-process). Caller must ensure TOOLS_BASE_URL is up.
+ */
+export async function runReplayDemo(
+  options: RunReplayDemoOptions = {},
+): Promise<ReplayDemoResult> {
+  const logs: Array<{ line: string; stream: "stdout" | "stderr" }> = [];
+  const emit = (line: string, stream: "stdout" | "stderr" = "stdout") => {
+    logs.push({ line, stream });
+    options.onLog?.(line, stream);
+  };
 
-  const scenarios = loadScenarios();
-  const rows: TrajectoryRow[] = [];
+  const origLog = console.log;
+  const origErr = console.error;
+  let reentering = false;
+  console.log = (...args: unknown[]) => {
+    if (reentering) {
+      origLog.apply(console, args as []);
+      return;
+    }
+    reentering = true;
+    try {
+      const line = args
+        .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
+        .join(" ");
+      emit(line, "stdout");
+      origLog.apply(console, args as []);
+    } finally {
+      reentering = false;
+    }
+  };
+  console.error = (...args: unknown[]) => {
+    if (reentering) {
+      origErr.apply(console, args as []);
+      return;
+    }
+    reentering = true;
+    try {
+      const line = args
+        .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
+        .join(" ");
+      emit(line, "stderr");
+      origErr.apply(console, args as []);
+    } finally {
+      reentering = false;
+    }
+  };
 
   try {
-    console.log(
-      JSON.stringify({
-        type: "replay_demo_start",
-        scenarios: scenarios.map((s) => ({ label: s.label, task: s.task })),
-        note: "Uses runOnePlanner; mock tools required on :5678",
-      }),
-    );
+    await prepareDemoStores(Boolean(options.forceOffline));
+    await pingTools();
+    await initObservability();
 
-    for (const scenario of scenarios) {
-      console.log(`\n=== ${scenario.label} ===`);
+    const scenarios = loadScenarios();
+    const rows: TrajectoryRow[] = [];
+
+    try {
       console.log(
         JSON.stringify({
-          type: "replay_scenario",
-          label: scenario.label,
-          task: scenario.task,
+          type: "replay_demo_start",
+          scenarios: scenarios.map((s) => ({ label: s.label, task: s.task })),
+          note: "Uses runOnePlanner; mock tools required",
         }),
       );
-      const t0 = Date.now();
-      const result = await runOnePlanner(scenario.task);
-      const row = captureRow(scenario.label, result, Date.now() - t0);
-      rows.push(row);
-      printRow(row);
-    }
 
-    printComparisonTable(rows);
+      for (const scenario of scenarios) {
+        console.log(`\n=== ${scenario.label} ===`);
+        console.log(
+          JSON.stringify({
+            type: "replay_scenario",
+            label: scenario.label,
+            task: scenario.task,
+          }),
+        );
+        const t0 = Date.now();
+        const result = await runOnePlanner(scenario.task);
+        const row = captureRow(scenario.label, result, Date.now() - t0);
+        rows.push(row);
+        printRow(row);
+      }
 
-    const trajectoryPath = writeTrajectoryArtifact(rows);
-    console.log(
-      JSON.stringify({
-        type: "replay_trajectory_written",
-        path: trajectoryPath,
-        row_count: rows.length,
-      }),
-    );
+      printComparisonTable(rows);
 
-    const seenA = rows.find((r) => r.label === "seen_a")!;
-    const seenB = rows.find((r) => r.label === "seen_b")!;
-    const unseen = rows.find((r) => r.label === "unseen")!;
-
-    const signals = evaluateImprovement(rows);
-    const anyOk = signals.some((s) => s.ok);
-
-    console.log("\n=== trajectory summary ===");
-    console.log(
-      JSON.stringify(
-        {
-          type: "replay_demo_summary",
-          seen_a: {
-            success: seenA.success,
-            failed_tool_calls: seenA.failed_tool_calls,
-            failed_list_orders: seenA.failed_list_orders,
-            lessons_retrieved: seenA.lessons_retrieved,
-            reflection_status: seenA.reflection_status,
-            first_tool: seenA.first_tool,
-          },
-          seen_b: {
-            success: seenB.success,
-            failed_tool_calls: seenB.failed_tool_calls,
-            failed_list_orders: seenB.failed_list_orders,
-            lessons_retrieved: seenB.lessons_retrieved,
-            reflection_status: seenB.reflection_status,
-            lessons_promoted: seenB.lessons_promoted,
-            first_tool: seenB.first_tool,
-          },
-          unseen: {
-            success: unseen.success,
-            failed_tool_calls: unseen.failed_tool_calls,
-            failed_list_orders: unseen.failed_list_orders,
-            lessons_retrieved: unseen.lessons_retrieved,
-            retrieval_path: unseen.retrieval_path,
-            first_tool: unseen.first_tool,
-            tool_sequence: unseen.tool_sequence,
-          },
-          improvement: {
-            failed_list_orders_delta:
-              seenA.failed_list_orders - unseen.failed_list_orders,
-            failed_tool_calls_delta:
-              seenA.failed_tool_calls - unseen.failed_tool_calls,
-            success_rose: unseen.success && !seenA.success,
-            lessons_injected_on_unseen: unseen.lessons_retrieved,
-            note: "Expected: failed list_orders drops on unseen; success rises via shared-factor lesson injection",
-          },
-          assertion: {
-            require: "at least one of A/B/C",
-            signals,
-            passed: anyOk,
-          },
-        },
-        null,
-        2,
-      ),
-    );
-
-    if (!anyOk) {
-      console.error(
-        "replay:demo assertion failed — no clear improvement signal (A/B/C). See scripts/replay-demo.ts header.",
-      );
-      process.exitCode = 1;
-    } else {
+      const trajectoryPath = writeTrajectoryArtifact(rows);
       console.log(
         JSON.stringify({
-          type: "replay_demo_ok",
-          signals_passed: signals.filter((s) => s.ok).map((s) => s.id),
+          type: "replay_trajectory_written",
+          path: trajectoryPath,
+          row_count: rows.length,
         }),
       );
+
+      const seenA = rows.find((r) => r.label === "seen_a")!;
+      const seenB = rows.find((r) => r.label === "seen_b")!;
+      const unseen = rows.find((r) => r.label === "unseen")!;
+
+      const signals = evaluateImprovement(rows);
+      const anyOk = signals.some((s) => s.ok);
+
+      console.log("\n=== trajectory summary ===");
+      console.log(
+        JSON.stringify(
+          {
+            type: "replay_demo_summary",
+            seen_a: {
+              success: seenA.success,
+              failed_tool_calls: seenA.failed_tool_calls,
+              failed_list_orders: seenA.failed_list_orders,
+              lessons_retrieved: seenA.lessons_retrieved,
+              reflection_status: seenA.reflection_status,
+              first_tool: seenA.first_tool,
+            },
+            seen_b: {
+              success: seenB.success,
+              failed_tool_calls: seenB.failed_tool_calls,
+              failed_list_orders: seenB.failed_list_orders,
+              lessons_retrieved: seenB.lessons_retrieved,
+              reflection_status: seenB.reflection_status,
+              lessons_promoted: seenB.lessons_promoted,
+              first_tool: seenB.first_tool,
+            },
+            unseen: {
+              success: unseen.success,
+              failed_tool_calls: unseen.failed_tool_calls,
+              failed_list_orders: unseen.failed_list_orders,
+              lessons_retrieved: unseen.lessons_retrieved,
+              retrieval_path: unseen.retrieval_path,
+              first_tool: unseen.first_tool,
+              tool_sequence: unseen.tool_sequence,
+            },
+            improvement: {
+              failed_list_orders_delta:
+                seenA.failed_list_orders - unseen.failed_list_orders,
+              failed_tool_calls_delta:
+                seenA.failed_tool_calls - unseen.failed_tool_calls,
+              success_rose: unseen.success && !seenA.success,
+              lessons_injected_on_unseen: unseen.lessons_retrieved,
+              note: "Expected: failed list_orders drops on unseen; success rises via shared-factor lesson injection",
+            },
+            assertion: {
+              require: "at least one of A/B/C",
+              signals,
+              passed: anyOk,
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      if (!anyOk) {
+        console.error(
+          "replay:demo assertion failed — no clear improvement signal (A/B/C). See scripts/replay-demo.ts header.",
+        );
+      } else {
+        console.log(
+          JSON.stringify({
+            type: "replay_demo_ok",
+            signals_passed: signals.filter((s) => s.ok).map((s) => s.id),
+          }),
+        );
+      }
+
+      return {
+        ok: anyOk,
+        rows,
+        trajectory_path: trajectoryPath,
+        signals,
+        exit_code: anyOk ? 0 : 1,
+      };
+    } finally {
+      await closeSemanticMemory();
+      await shutdownObservability();
     }
   } finally {
-    await closeSemanticMemory();
-    await shutdownObservability();
+    console.log = origLog;
+    console.error = origErr;
   }
 }
 
-main().catch(async (err) => {
-  console.error(err);
-  await closeSemanticMemory().catch(() => undefined);
-  await shutdownObservability().catch(() => undefined);
-  process.exit(1);
-});
+async function main(): Promise<void> {
+  const result = await runReplayDemo();
+  process.exitCode = result.exit_code;
+}
+
+// CLI only — dashboard imports runReplayDemo without executing main.
+if (
+  !process.env.VERCEL &&
+  process.argv[1] &&
+  /replay-demo\.(ts|js|mjs)$/.test(process.argv[1].replace(/\\/g, "/"))
+) {
+  main().catch(async (err) => {
+    console.error(err);
+    await closeSemanticMemory().catch(() => undefined);
+    await shutdownObservability().catch(() => undefined);
+    process.exit(1);
+  });
+}

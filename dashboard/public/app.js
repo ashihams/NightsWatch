@@ -321,13 +321,19 @@ function ensureEventSource() {
 }
 
 async function startDemo() {
-  ensureEventSource();
   clearConsole();
   demoRunActive = true;
   setRunningUi(true, "starting");
   const status = el("status");
   try {
     const res = await fetch("/api/demo/run", { method: "POST" });
+    const ctype = res.headers.get("content-type") || "";
+    if (ctype.includes("text/event-stream") && res.body) {
+      // Vercel / inline offline: stream lives on the POST response.
+      await consumeDemoStream(res.body);
+      return;
+    }
+    ensureEventSource();
     const body = await res.json();
     if (!res.ok) {
       demoRunActive = false;
@@ -350,6 +356,78 @@ async function startDemo() {
   }
 }
 
+async function consumeDemoStream(body) {
+  const status = el("status");
+  if (status) status.textContent = "// demo running (inline)";
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const parts = buf.split("\n\n");
+    buf = parts.pop() || "";
+    for (const block of parts) {
+      handleSseBlock(block);
+    }
+  }
+  if (buf.trim()) handleSseBlock(buf);
+  demoRunActive = false;
+  refresh();
+}
+
+function handleSseBlock(block) {
+  const lines = block.split("\n");
+  let eventName = "message";
+  let data = "";
+  for (const line of lines) {
+    if (line.startsWith("event:")) eventName = line.slice(6).trim();
+    else if (line.startsWith("data:")) data += line.slice(5).trim();
+  }
+  if (!data) return;
+  try {
+    const payload = JSON.parse(data);
+    if (eventName === "hello") {
+      demoRunActive = Boolean(payload.running);
+      setRunningUi(demoRunActive, payload.phase || "boot");
+      return;
+    }
+    if (eventName === "done") {
+      demoRunActive = false;
+      setRunningUi(false, payload.phase || (payload.exit_code === 0 ? "done" : "failed"));
+      if (payload.trajectory?.rows) {
+        try {
+          sessionStorage.setItem(
+            "loop_last_trajectory",
+            JSON.stringify(payload.trajectory),
+          );
+        } catch {
+          // ignore
+        }
+        renderTrajectory({
+          empty: false,
+          hint: null,
+          updated_at: payload.trajectory.updated_at,
+          rows: payload.trajectory.rows,
+        });
+      }
+      return;
+    }
+    appendConsole(payload);
+    if (!demoRunActive) return;
+    if (payload.parsed?.type === "replay_scenario" && payload.parsed.label) {
+      setRunningUi(true, payload.parsed.label);
+    } else if (payload.parsed?.type === "replay_demo_start") {
+      setRunningUi(true, "boot");
+    } else if (payload.parsed?.type === "replay_demo_ok") {
+      setRunningUi(true, "done");
+    }
+  } catch {
+    // ignore
+  }
+}
+
 async function refresh() {
   const status = el("status");
   try {
@@ -365,7 +443,25 @@ async function refresh() {
     const lessons = await lessonsRes.json();
     const stack = await stackRes.json();
     renderStack(stack);
-    renderTrajectory(traj);
+    let trajView = traj;
+    try {
+      const cached = sessionStorage.getItem("loop_last_trajectory");
+      if (cached && (traj.empty || !traj.rows?.length)) {
+        trajView = { empty: false, hint: null, ...JSON.parse(cached) };
+      } else if (cached) {
+        const c = JSON.parse(cached);
+        if (
+          c.updated_at &&
+          traj.updated_at &&
+          Date.parse(c.updated_at) > Date.parse(traj.updated_at)
+        ) {
+          trajView = { empty: false, hint: null, ...c };
+        }
+      }
+    } catch {
+      // ignore
+    }
+    renderTrajectory(trajView);
     renderLessons(lessons);
     if (!demoRunActive && status) {
       status.textContent = `// sync ${new Date().toLocaleTimeString()}`;

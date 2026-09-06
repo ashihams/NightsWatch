@@ -3,6 +3,7 @@
  * POST JSON endpoints that behave like imperfect third-party tools.
  *
  * Port defaults to 5678 (n8n-like). Override with PORT=...
+ * Programmatic: const { server, port, close } = await startMockCrmServer()
  */
 
 const http = require("http");
@@ -10,8 +11,13 @@ const { customers, orders, tickets, nextTicketId } = require("./data");
 
 const PORT = Number(process.env.PORT) || 5678;
 
-/** Rough chance helpers — imperfect tool behavior. */
+/** When set, disable flaky quirks so serverless demos stay deterministic. */
+function deterministic() {
+  return /^(1|true|yes|on)$/i.test(process.env.MOCK_CRM_DETERMINISTIC || "");
+}
+
 function chance(p) {
+  if (deterministic()) return false;
   return Math.random() < p;
 }
 
@@ -49,7 +55,6 @@ function send(res, status, body) {
 }
 
 function normalizePath(url) {
-  // Accept /webhook/<tool>, /<tool>, trailing slashes
   const path = (url || "/").split("?")[0].replace(/\/+$/, "") || "/";
   const m = path.match(/^(?:\/webhook)?\/([a-z_]+)$/);
   return m ? m[1] : null;
@@ -78,7 +83,6 @@ function searchCustomers(body) {
     return hay.includes(q) || q.split(/\s+/).every((tok) => hay.includes(tok));
   });
 
-  // Sometimes return a truncated / partial match set (realistic API quirk)
   if (results.length > 2 && chance(0.25)) {
     results = results.slice(0, 2);
     return {
@@ -94,7 +98,6 @@ function searchCustomers(body) {
     };
   }
 
-  // Fuzzy: if no exact-ish hits, return "similar" names (noise)
   if (results.length === 0 && chance(0.4)) {
     const noise = customers.slice(0, 2).map(publicCustomer);
     return {
@@ -164,7 +167,6 @@ function getCustomer(body) {
     };
   }
 
-  // Occasional stale / partial profile
   if (chance(0.15)) {
     return {
       status: 200,
@@ -190,9 +192,9 @@ function getCustomer(body) {
 function listOrders(body) {
   const customerId = body.customer_id ?? body.customerId;
 
-  // Hard dependency: without customer_id, fail OR return useless/ambiguous data
   if (!customerId) {
-    if (chance(0.5)) {
+    // Deterministic teaching miss for offline demos.
+    if (deterministic() || chance(0.5)) {
       return {
         status: 400,
         body: {
@@ -203,12 +205,10 @@ function listOrders(body) {
         },
       };
     }
-    // Ambiguous / useless success-shaped response (teaches the agent not to trust this)
     const randomSlice = orders.slice(0, 3).map((o) => ({
       order_id: o.order_id,
       status: o.status,
       total: o.total,
-      // deliberately omit customer_id sometimes
       ...(chance(0.5) ? { customer_id: o.customer_id } : {}),
     }));
     return {
@@ -271,7 +271,6 @@ async function getOrder(body) {
     };
   }
 
-  // Occasional slow response (downstream latency)
   if (chance(0.3)) {
     const delay = 1800 + Math.floor(Math.random() * 2200);
     await sleep(delay);
@@ -351,7 +350,6 @@ function createTicket(body) {
     };
   }
 
-  // Occasional rate-limit style error
   if (chance(0.2)) {
     return {
       status: 429,
@@ -388,59 +386,106 @@ const handlers = {
   create_ticket: async (body) => createTicket(body),
 };
 
-const server = http.createServer(async (req, res) => {
-  if (req.method === "OPTIONS") {
-    res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
+function createRequestListener() {
+  return async (req, res) => {
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      });
+      res.end();
+      return;
+    }
+
+    if (req.method === "GET" && (req.url === "/" || req.url === "/health")) {
+      send(res, 200, {
+        ok: true,
+        service: "loop-mock-crm",
+        tools: Object.keys(handlers),
+        deterministic: deterministic(),
+        hint: "POST JSON to /webhook/<tool_name>",
+      });
+      return;
+    }
+
+    if (req.method !== "POST") {
+      send(res, 405, {
+        ok: false,
+        error: "method_not_allowed",
+        message: "Use POST with JSON.",
+      });
+      return;
+    }
+
+    const tool = normalizePath(req.url);
+    if (!tool || !handlers[tool]) {
+      send(res, 404, {
+        ok: false,
+        error: "unknown_tool",
+        message: `Unknown path ${req.url}. Expected /webhook/{${Object.keys(handlers).join("|")}}`,
+      });
+      return;
+    }
+
+    try {
+      const body = await readJson(req);
+      const result = await handlers[tool](body);
+      send(res, result.status, result.body);
+    } catch (err) {
+      send(res, err.status || 500, {
+        ok: false,
+        error: "server_error",
+        message: err.message || "Unexpected error",
+      });
+    }
+  };
+}
+
+/**
+ * @param {{ port?: number, host?: string }} [opts]
+ * @returns {Promise<{ server: import('http').Server, port: number, baseUrl: string, close: () => Promise<void> }>}
+ */
+function startMockCrmServer(opts = {}) {
+  const host = opts.host || "127.0.0.1";
+  const wantPort = opts.port != null ? Number(opts.port) : 0;
+  const server = http.createServer(createRequestListener());
+
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(wantPort, host, () => {
+      const addr = server.address();
+      const port = typeof addr === "object" && addr ? addr.port : wantPort;
+      resolve({
+        server,
+        port,
+        baseUrl: `http://${host}:${port}`,
+        close: () =>
+          new Promise((res, rej) => {
+            server.close((err) => (err ? rej(err) : res()));
+          }),
+      });
     });
-    res.end();
-    return;
-  }
+  });
+}
 
-  if (req.method === "GET" && (req.url === "/" || req.url === "/health")) {
-    send(res, 200, {
-      ok: true,
-      service: "loop-mock-crm",
-      tools: Object.keys(handlers),
-      hint: "POST JSON to /webhook/<tool_name>",
+module.exports = {
+  handlers,
+  startMockCrmServer,
+  createRequestListener,
+};
+
+if (require.main === module) {
+  startMockCrmServer({ port: PORT, host: "0.0.0.0" })
+    .then(({ port }) => {
+      console.log(`Loop mock CRM listening on http://localhost:${port}`);
+      console.log("Tools:");
+      for (const name of Object.keys(handlers)) {
+        console.log(`  POST /webhook/${name}`);
+      }
+    })
+    .catch((err) => {
+      console.error(err);
+      process.exit(1);
     });
-    return;
-  }
-
-  if (req.method !== "POST") {
-    send(res, 405, { ok: false, error: "method_not_allowed", message: "Use POST with JSON." });
-    return;
-  }
-
-  const tool = normalizePath(req.url);
-  if (!tool || !handlers[tool]) {
-    send(res, 404, {
-      ok: false,
-      error: "unknown_tool",
-      message: `Unknown path ${req.url}. Expected /webhook/{${Object.keys(handlers).join("|")}}`,
-    });
-    return;
-  }
-
-  try {
-    const body = await readJson(req);
-    const result = await handlers[tool](body);
-    send(res, result.status, result.body);
-  } catch (err) {
-    send(res, err.status || 500, {
-      ok: false,
-      error: "server_error",
-      message: err.message || "Unexpected error",
-    });
-  }
-});
-
-server.listen(PORT, () => {
-  console.log(`Loop mock CRM listening on http://localhost:${PORT}`);
-  console.log("Tools:");
-  for (const name of Object.keys(handlers)) {
-    console.log(`  POST /webhook/${name}`);
-  }
-});
+}

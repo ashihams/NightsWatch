@@ -13,6 +13,7 @@
 import { config } from "dotenv";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync, existsSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { extname, join, resolve } from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
@@ -26,35 +27,60 @@ import {
   ollamaEmbedEnabled,
 } from "../agent/src/embeddings.js";
 import { tensormuxConfigured } from "../agent/src/llm.js";
+import { runReplayDemo } from "../scripts/replay-demo.js";
 
+const nodeRequire = createRequire(resolve(process.cwd(), "package.json"));
+const { startMockCrmServer } = nodeRequire("./tools/mock-server/index.js") as {
+  startMockCrmServer: (opts?: {
+    port?: number;
+    host?: string;
+  }) => Promise<{
+    port: number;
+    baseUrl: string;
+    close: () => Promise<void>;
+  }>;
+};
 config({ path: resolve(process.cwd(), ".env"), override: true });
 
 const PUBLIC_DIR = resolve(process.cwd(), "dashboard/public");
 const PORT = Number(process.env.DASHBOARD_PORT || 3847);
 const HINT =
-  "No replay data yet. Click RUN DEMO (needs n8n or mock tools on :5678).";
+  "No replay data yet. Click RUN DEMO (offline planner + in-process mock CRM).";
+
+function isVercel(): boolean {
+  return Boolean(process.env.VERCEL);
+}
 
 /** Match replay-demo SQLite isolation so the dashboard sees the demo spine. */
 function pointAtReplayDemoStores(): void {
+  const root =
+    process.env.REPLAY_DATA_ROOT ||
+    (isVercel() ? "/tmp/loop-replay-demo" : "./data/replay-demo");
   process.env.WORKING_DB_PATH =
-    process.env.REPLAY_WORKING_DB_PATH || "./data/replay-demo/working.sqlite";
+    process.env.REPLAY_WORKING_DB_PATH || `${root}/working.sqlite`;
   process.env.EPISODIC_DB_PATH =
-    process.env.REPLAY_EPISODIC_DB_PATH || "./data/replay-demo/episodic.sqlite";
+    process.env.REPLAY_EPISODIC_DB_PATH || `${root}/episodic.sqlite`;
   process.env.SEMANTIC_FALLBACK_PATH =
     process.env.REPLAY_SEMANTIC_FALLBACK_PATH ||
-    "./data/replay-demo/semantic_lessons.json";
+    `${root}/semantic_lessons.json`;
   process.env.PENDING_REFLECTION_DIR =
     process.env.REPLAY_PENDING_REFLECTION_DIR ||
-    "./data/replay-demo/pending_reflection";
+    `${root}/pending_reflection`;
+  if (!process.env.REPLAY_TRAJECTORY_PATH) {
+    process.env.REPLAY_TRAJECTORY_PATH = `${root}/trajectory.json`;
+  }
 }
 
 function trajectoryPath(): string {
-  const preferred = resolve(
-    process.cwd(),
-    process.env.REPLAY_TRAJECTORY_PATH || "./data/replay-demo/trajectory.json",
-  );
-  if (existsSync(preferred)) return preferred;
-  // Bundled snapshot for Vercel / fresh clones (data/ is gitignored).
+  const candidates = [
+    process.env.REPLAY_TRAJECTORY_PATH,
+    isVercel() ? "/tmp/loop-replay-demo/trajectory.json" : null,
+    "./data/replay-demo/trajectory.json",
+  ].filter(Boolean) as string[];
+  for (const c of candidates) {
+    const abs = c.startsWith("/") ? c : resolve(process.cwd(), c);
+    if (existsSync(abs)) return abs;
+  }
   return resolve(process.cwd(), "dashboard/fixtures/trajectory.json");
 }
 
@@ -178,18 +204,127 @@ function attachLineBuffer(
   });
 }
 
-function isVercel(): boolean {
-  return Boolean(process.env.VERCEL);
+/**
+ * In-process offline demo: ephemeral mock CRM + hash embeds + offline planner.
+ * Streams SSE on `res` (used on Vercel where spawn + cross-request SSE cannot work).
+ */
+async function runInlineOfflineDemo(res: ServerResponse): Promise<void> {
+  if (demoState.running) {
+    sendJson(res, 409, {
+      ok: false,
+      error: "demo already running",
+      ...demoStatusPayload(),
+    });
+    return;
+  }
+
+  demoState.running = true;
+  demoState.started_at = new Date().toISOString();
+  demoState.finished_at = null;
+  demoState.exit_code = null;
+  demoState.phase = "starting";
+  demoState.events = [];
+  demoState.pid = null;
+
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive",
+    "access-control-allow-origin": "*",
+    "x-accel-buffering": "no",
+  });
+  res.write(
+    `event: hello\ndata: ${JSON.stringify({ ...demoStatusPayload(), mode: "inline_offline" })}\n\n`,
+  );
+
+  const writeEvt = (
+    stream: DemoEvent["stream"],
+    line: string,
+    parsed?: Record<string, unknown> | null,
+  ) => {
+    pushDemoEvent(stream, line, parsed ?? tryParseJsonLine(line));
+    // pushDemoEvent already fans out to sseClients; also write to this response
+    const evt = demoState.events[demoState.events.length - 1];
+    try {
+      res.write(`data: ${JSON.stringify(evt)}\n\n`);
+    } catch {
+      // client gone
+    }
+  };
+
+  let mock: Awaited<ReturnType<typeof startMockCrmServer>> | null = null;
+  try {
+    process.env.MOCK_CRM_DETERMINISTIC = "1";
+    process.env.TOOLS_KIND = "mock";
+    process.env.REPLAY_USE_OFFLINE = "1";
+    if (isVercel()) {
+      process.env.REPLAY_DATA_ROOT = "/tmp/loop-replay-demo";
+    }
+    pointAtReplayDemoStores();
+
+    mock = await startMockCrmServer({ host: "127.0.0.1", port: 0 });
+    process.env.TOOLS_BASE_URL = mock.baseUrl;
+    writeEvt(
+      "system",
+      `inline mock CRM ${mock.baseUrl} · offline planner · hash embeds`,
+    );
+
+    const result = await runReplayDemo({
+      forceOffline: true,
+      onLog: (line, stream) => {
+        writeEvt(stream, line);
+      },
+    });
+
+    demoState.exit_code = result.exit_code;
+    demoState.phase = result.ok ? "done" : "failed";
+    demoState.finished_at = new Date().toISOString();
+    demoState.running = false;
+
+    res.write(
+      `event: done\ndata: ${JSON.stringify({
+        exit_code: result.exit_code,
+        phase: demoState.phase,
+        ok: result.ok,
+        trajectory: {
+          type: "replay_trajectory",
+          updated_at: new Date().toISOString(),
+          rows: result.rows,
+        },
+      })}\n\n`,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    writeEvt("system", `inline demo error: ${msg}`);
+    demoState.running = false;
+    demoState.finished_at = new Date().toISOString();
+    demoState.exit_code = 1;
+    demoState.phase = "error";
+    try {
+      res.write(
+        `event: done\ndata: ${JSON.stringify({
+          exit_code: 1,
+          phase: "error",
+          ok: false,
+          error: msg,
+        })}\n\n`,
+      );
+    } catch {
+      // ignore
+    }
+  } finally {
+    if (mock) {
+      await mock.close().catch(() => undefined);
+    }
+    try {
+      res.end();
+    } catch {
+      // ignore
+    }
+  }
 }
 
 function startDemoRun(): { ok: boolean; error?: string } {
-  if (isVercel()) {
-    return {
-      ok: false,
-      error:
-        "RUN DEMO is local-only on Vercel (needs n8n/Ollama/TensorMux). Run npm run dashboard locally, or view Neo4j lessons + last trajectory here.",
-    };
-  }
   if (demoState.running) {
     return { ok: false, error: "demo already running" };
   }
@@ -375,10 +510,19 @@ async function readLessonsPayload(): Promise<{
 async function probeTools(): Promise<{
   ok: boolean;
   base_url: string;
-  kind: "n8n" | "mock" | "unknown" | "down";
+  kind: "n8n" | "mock" | "unknown" | "down" | "inline";
   status: number | null;
   note: string;
 }> {
+  if (isVercel()) {
+    return {
+      ok: true,
+      base_url: "(in-process on RUN DEMO)",
+      kind: "inline",
+      status: 200,
+      note: "Vercel RUN DEMO spins up deterministic mock CRM in-process (offline planner + hash embeds). No localhost n8n/Ollama required.",
+    };
+  }
   const base = toolsBaseUrl();
   try {
     const res = await fetch(`${base}/webhook/search_customers`, {
@@ -433,11 +577,13 @@ async function readStackPayload(): Promise<Record<string, unknown>> {
   }
 
   const neatlogsKey = Boolean((process.env.NEATLOGS_API_KEY || "").trim());
+  const vercelOffline = isVercel();
 
   return {
     type: "stack",
     updated_at: new Date().toISOString(),
     demo: demoStatusPayload(),
+    mode: vercelOffline ? "vercel_offline_inline" : "local",
     tools_crm: {
       ...tools,
       data: "fixture",
@@ -451,23 +597,30 @@ async function readStackPayload(): Promise<Record<string, unknown>> {
       fallback_path: semanticFallbackPath(),
     },
     embeddings: {
-      api_configured: embeddingApiConfigured(),
-      ollama_enabled: ollamaEmbedEnabled(),
-      model:
-        (process.env.EMBEDDING_MODEL || "").trim() ||
-        (embeddingApiConfigured() || ollamaEmbedEnabled()
-          ? "nomic-embed-text"
-          : "hash-bow-256"),
-      base_url: (process.env.EMBEDDING_BASE_URL || "").trim() || null,
+      api_configured: vercelOffline ? false : embeddingApiConfigured(),
+      ollama_enabled: vercelOffline ? false : ollamaEmbedEnabled(),
+      model: vercelOffline
+        ? "hash-bow-256"
+        : (process.env.EMBEDDING_MODEL || "").trim() ||
+          (embeddingApiConfigured() || ollamaEmbedEnabled()
+            ? "nomic-embed-text"
+            : "hash-bow-256"),
+      base_url: vercelOffline
+        ? null
+        : (process.env.EMBEDDING_BASE_URL || "").trim() || null,
     },
     episodic: {
       path: episodicMemoryDbPath(),
       recent_count: episodicCount,
     },
     tensormux: {
-      configured: tensormuxConfigured(),
-      base_url: (process.env.TENSORMUX_BASE_URL || "").trim() || null,
-      model: (process.env.TENSORMUX_MODEL || "").trim() || null,
+      configured: vercelOffline ? false : tensormuxConfigured(),
+      base_url: vercelOffline
+        ? null
+        : (process.env.TENSORMUX_BASE_URL || "").trim() || null,
+      model: vercelOffline
+        ? "offline-planner"
+        : (process.env.TENSORMUX_MODEL || "").trim() || null,
     },
     open_telemetry: {
       provider: "neatlogs",
@@ -592,6 +745,11 @@ export async function handle(
 
   if (req.method === "POST" && path === "/api/demo/run") {
     await readBody(req);
+    // Vercel: one-request inline offline demo (spawn + cross-request SSE cannot work).
+    if (isVercel() || process.env.LOOP_INLINE_DEMO === "1") {
+      await runInlineOfflineDemo(res);
+      return;
+    }
     const started = startDemoRun();
     if (!started.ok) {
       sendJson(res, 409, {

@@ -6,9 +6,8 @@
   "buildCommand": "",
   "functions": {
     "api/index.ts": {
-      "memory": 1024,
       "maxDuration": 60,
-      "includeFiles": "{dashboard/fixtures/**,dashboard/public/**,agent/src/**}"
+      "includeFiles": "{dashboard/fixtures/**,dashboard/public/**,agent/src/**,scripts/**,tools/mock-server/**}"
     }
   },
   "rewrites": [
