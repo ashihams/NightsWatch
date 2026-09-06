@@ -1,0 +1,25 @@
+# Local TensorMux -> Windows Ollama
+# Port 8090 (SigNoz already uses 8080)
+gateway:
+  host: "0.0.0.0"
+  port: 8090
+  strategy: "least_inflight"
+
+health:
+  interval_s: 5
+  timeout_s: 2
+  fail_threshold: 2
+  success_threshold: 1
+
+logging:
+  level: "INFO"
+  jsonl_path: "./tensormux_requests.jsonl"
+
+backends:
+  - name: "ollama"
+    url: "http://127.0.0.1:11434"
+    engine: "ollama"
+    model: "qwen2.5:1.5b"
+    weight: 1
+    tags: ["gpu", "ollama"]
+    health_endpoint: "/v1/models"
