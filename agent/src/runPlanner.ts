@@ -68,6 +68,8 @@ export type PlannerRunResult = {
   analysis?: AnalyzeRunResult;
   analysisSource?: "neatlogs" | "working_memory";
   reflection?: StoreLessonResult;
+  /** Per-run loop_eval blob (includes task_success). */
+  evalMetrics?: Record<string, unknown>;
 };
 
 function isToolName(name: string): name is ToolName {
@@ -500,6 +502,7 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
             status: c.status,
             latencyMs: c.latencyMs,
             body: c.body,
+            args: c.args,
           })),
         }),
       );
@@ -624,6 +627,7 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
     analysis,
     analysisSource,
     reflection,
+    evalMetrics: core.evalMetrics,
   };
 }
 
