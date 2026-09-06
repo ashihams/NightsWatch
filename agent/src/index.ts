@@ -43,6 +43,14 @@ async function main(): Promise<void> {
       );
     }
 
+    if (result.reflection) {
+      const l = result.reflection.lesson;
+      console.log(
+        `reflection: ${l.usable ? "promoted" : "candidate"} evidence_count=${l.evidence_count} confidence=${l.confidence} backend=${result.reflection.backend} lesson_id=${l.id}`,
+      );
+      console.log(`  lesson: ${l.text}`);
+    }
+
     const provedListOrdersMiss = result.toolCalls.some(
       (c) =>
         c.name === "list_orders" &&
