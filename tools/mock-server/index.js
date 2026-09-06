@@ -1,5 +1,5 @@
-/**
- * Minimal CRM / support webhook mock for Nights Watch.
+﻿/**
+ * Minimal CRM / support webhook mock for Loop.
  * POST JSON endpoints that behave like imperfect third-party tools.
  *
  * Port defaults to 5678 (n8n-like). Override with PORT=...
@@ -402,7 +402,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && (req.url === "/" || req.url === "/health")) {
     send(res, 200, {
       ok: true,
-      service: "nights-watch-mock-crm",
+      service: "loop-mock-crm",
       tools: Object.keys(handlers),
       hint: "POST JSON to /webhook/<tool_name>",
     });
@@ -438,7 +438,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Nights Watch mock CRM listening on http://localhost:${PORT}`);
+  console.log(`Loop mock CRM listening on http://localhost:${PORT}`);
   console.log("Tools:");
   for (const name of Object.keys(handlers)) {
     console.log(`  POST /webhook/${name}`);

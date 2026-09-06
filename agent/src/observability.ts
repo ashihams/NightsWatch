@@ -2,11 +2,11 @@
  * Neatlogs observability — deep wiring for TensorMux planner runs.
  *
  * Lifecycle (per Neatlogs TS SDK docs):
- *   await init() → WORKFLOW root (trace) → nested LLM (wrapOpenAI) + TOOL spans
+ *   await init() → WORKFLOW root (span with real args) → nested AGENT / LLM / TOOL
  *   → await flush() BEFORE MCP read-back → shutdown on process exit.
  *
- * TensorMux is the OpenAI-compatible gateway the wrapped client talks to;
- * Neatlogs captures those chat.completions as LLM spans under the same WORKFLOW.
+ * Critical: pass real arguments into span()-wrapped functions so Neatlogs
+ * captureInput/captureOutput populate the dashboard (empty args → empty traces).
  */
 
 import {
@@ -17,12 +17,12 @@ import {
   setTraceOutput,
   shutdown,
   span,
-  trace,
   wrapOpenAI,
 } from "neatlogs";
 import type OpenAI from "openai";
 
 let tracingEnabled = false;
+let wrappedOpenAI: OpenAI | null = null;
 
 export function isTracingEnabled(): boolean {
   return tracingEnabled;
@@ -60,31 +60,37 @@ export async function initObservability(): Promise<boolean> {
   const tmHost = tensormuxHost();
   const tmModel = (process.env.TENSORMUX_MODEL || "").trim();
 
+  // Prevent empty auto-root WORKFLOW shells when a child span briefly loses parent context.
+  if (!process.env.NEATLOGS_AUTO_ROOT) {
+    process.env.NEATLOGS_AUTO_ROOT = "false";
+  }
+
   try {
     await init({
       apiKey,
       workflowName: workflowName(),
       ...(endpoint ? { endpoint } : {}),
-      // Shorter flush so CLI read-back after a run can see spans sooner
       flushInterval: Number(process.env.NEATLOGS_FLUSH_INTERVAL || 1),
       batchSize: Number(process.env.NEATLOGS_BATCH_SIZE || 32),
       captureLogs: true,
+      debug: process.env.NEATLOGS_DEBUG === "1",
       tags: [
-        "nights-watch",
+        "loop",
         "support-agent",
         tmHost ? "tensormux" : "offline-planner",
       ].filter(Boolean),
       metadata: {
-        product: "nights-watch",
+        product: "loop",
         llm_gateway: tmHost ? "tensormux" : "none",
         tensormux_host: tmHost || null,
         tensormux_model: tmModel || null,
       },
-      userId: "nights-watch-cli",
+      userId: "loop-cli",
     });
     tracingEnabled = true;
+    wrappedOpenAI = null;
     console.log(
-      `[neatlogs] init ok — workflow=${workflowName()} endpoint=${endpoint || "https://ingest.neatlogs.com"} tensormux=${tmHost || "unset"}`,
+      `[neatlogs] init ok — workflow=${workflowName()} endpoint=${endpoint || "https://ingest.neatlogs.com"} tensormux=${tmHost || "unset"} auto_root=${process.env.NEATLOGS_AUTO_ROOT}`,
     );
     return true;
   } catch (err) {
@@ -102,10 +108,15 @@ export async function flushObservability(): Promise<boolean> {
   if (!tracingEnabled) return false;
   try {
     const ok = await flush();
+    const settleMs = Number(process.env.NEATLOGS_FLUSH_SETTLE_MS || 2500);
+    if (settleMs > 0) {
+      await new Promise((r) => setTimeout(r, settleMs));
+    }
     console.log(
       JSON.stringify({
         type: "neatlogs_flush",
         ok: Boolean(ok),
+        settle_ms: settleMs,
       }),
     );
     return Boolean(ok);
@@ -131,37 +142,44 @@ export async function shutdownObservability(): Promise<void> {
     );
   } finally {
     tracingEnabled = false;
+    wrappedOpenAI = null;
   }
 }
 
 /**
  * Wrap an OpenAI-compatible client (TensorMux /v1) for LLM spans when tracing is on.
- * wrapOpenAI nests under the active WORKFLOW root; without a root it would open its own.
+ * Reuses one wrapper so parent context stays stable across planner steps.
  */
 export function maybeWrapOpenAI(client: OpenAI): OpenAI {
   if (!tracingEnabled) return client;
-  return wrapOpenAI(client) as OpenAI;
+  if (!wrappedOpenAI) {
+    wrappedOpenAI = wrapOpenAI(client) as OpenAI;
+  }
+  return wrappedOpenAI;
 }
 
 type SpanKind = "AGENT" | "TOOL" | "CHAIN" | "WORKFLOW" | "RETRIEVER" | "EMBEDDING";
 
 /**
- * Run `fn` under a Neatlogs span when tracing is enabled; otherwise run plain.
+ * Run `fn(input)` under a Neatlogs span. Always pass `input` so captureInput works.
  */
-export async function withSpan<T>(
+export async function withSpan<TInput, TResult>(
   options: { kind: SpanKind; name: string; toolName?: string },
-  fn: () => Promise<T>,
-): Promise<T> {
-  if (!tracingEnabled) return fn();
+  fn: (input: TInput) => Promise<TResult>,
+  input: TInput,
+): Promise<TResult> {
+  if (!tracingEnabled) return fn(input);
   const wrapped = span(
     {
       kind: options.kind,
       name: options.name,
+      captureInput: true,
+      captureOutput: true,
       ...(options.toolName ? { toolName: options.toolName } : {}),
     },
     fn,
   );
-  return wrapped();
+  return wrapped(input);
 }
 
 export type PlannerWorkflowMeta = {
@@ -170,84 +188,76 @@ export type PlannerWorkflowMeta = {
   mode: "tensormux" | "offline";
 };
 
+type PlannerWorkflowResult = {
+  finalMessage?: string;
+  evalMetrics?: Record<string, unknown>;
+};
+
 /**
  * One searchable WORKFLOW root per planner run.
- * Stamps nights_watch.run_id + TensorMux gateway attrs for MCP search_traces.
+ * Uses span() (not nested trace) so the task is captured as WORKFLOW input.
  * Analyzer must run AFTER this returns and after flushObservability().
  */
-export async function withPlannerWorkflow<T>(
+export async function withPlannerWorkflow<T extends PlannerWorkflowResult>(
   meta: PlannerWorkflowMeta,
-  fn: () => Promise<T & { finalMessage?: string }>,
+  fn: (meta: PlannerWorkflowMeta) => Promise<T>,
 ): Promise<T> {
-  if (!tracingEnabled) return fn();
+  if (!tracingEnabled) return fn(meta);
 
-  const tmHost = tensormuxHost();
-  const tmModel = (process.env.TENSORMUX_MODEL || "").trim();
+  const runWorkflow = span(
+    {
+      kind: "WORKFLOW",
+      name: workflowName(),
+      captureInput: true,
+      captureOutput: true,
+      goal: "Plan and execute CRM support tools for the user task",
+      role: "support-ops-planner",
+    },
+    async (m: PlannerWorkflowMeta) => {
+      log("planner.start run_id={runId} mode={mode} task={task}", {
+        runId: m.runId,
+        mode: m.mode,
+        task: m.task.slice(0, 200),
+      });
+
+      const result = await fn(m);
+
+      const output = {
+        run_id: m.runId,
+        loop_run_id: m.runId,
+        mode: m.mode,
+        product: "loop",
+        search_text: `loop.run_id ${m.runId} ${m.task}`,
+        final_message:
+          typeof result.finalMessage === "string"
+            ? result.finalMessage.slice(0, 500)
+            : undefined,
+        ...(result.evalMetrics || {}),
+      };
+      setTraceOutput(output);
+
+      if (result.evalMetrics) {
+        log("loop.eval {metrics}", {
+          metrics: JSON.stringify(result.evalMetrics).slice(0, 800),
+        });
+      }
+
+      log("planner.end run_id={runId}", { runId: m.runId });
+      return result;
+    },
+  );
 
   return identify(
     {
-      endUserId: "nights-watch-agent",
+      endUserId: "loop-agent",
       endUserMetadata: {
         run_id: meta.runId,
         mode: meta.mode,
-        product: "nights-watch",
+        product: "loop",
       },
+      sessionFeatureName: workflowName(),
+      sessionEntryPoint: "runOnePlanner",
     },
-    () =>
-      trace(
-        {
-          name: "runOnePlanner",
-          kind: "WORKFLOW",
-          endUserId: "nights-watch-agent",
-          endUserMetadata: {
-            run_id: meta.runId,
-            mode: meta.mode,
-          },
-          sessionFeatureName: "support-agent-planner",
-          sessionEntryPoint: "runOnePlanner",
-          input: {
-            run_id: meta.runId,
-            task: meta.task,
-            mode: meta.mode,
-          },
-          attributes: {
-            "nights_watch.run_id": meta.runId,
-            "nights_watch.mode": meta.mode,
-            "nights_watch.workflow": workflowName(),
-            "tensormux.enabled": meta.mode === "tensormux",
-            "tensormux.host": tmHost || "none",
-            "tensormux.model": tmModel || "none",
-          },
-        },
-        async (activeSpan) => {
-          try {
-            activeSpan.setAttribute("nights_watch.run_id", meta.runId);
-            activeSpan.setAttribute("nights_watch.mode", meta.mode);
-            if (tmHost) activeSpan.setAttribute("tensormux.host", tmHost);
-            if (tmModel) activeSpan.setAttribute("tensormux.model", tmModel);
-          } catch {
-            // attribute API may vary by SDK build — non-fatal
-          }
-
-          log("planner.start run_id={runId} mode={mode}", {
-            runId: meta.runId,
-            mode: meta.mode,
-          });
-
-          const result = await fn();
-
-          setTraceOutput({
-            run_id: meta.runId,
-            mode: meta.mode,
-            final_message:
-              typeof result.finalMessage === "string"
-                ? result.finalMessage.slice(0, 500)
-                : undefined,
-          });
-
-          log("planner.end run_id={runId}", { runId: meta.runId });
-          return result;
-        },
-      ),
+    () => runWorkflow(meta),
   );
 }

@@ -267,20 +267,24 @@ export async function reflectOnFlaggedRun(params: {
     throw new Error("reflectOnFlaggedRun requires analysis.flagged=true");
   }
 
-  return withSpan({ kind: "CHAIN", name: "reflectOnFlaggedRun" }, async () => {
-    if (tensormuxConfigured()) {
-      try {
-        return await tensormuxReflect(params);
-      } catch (err) {
-        console.warn(
-          "[reflection] TensorMux reflection failed — using offline fallback:",
-          err instanceof Error ? err.message : err,
-        );
-        return offlineReflect(params);
+  return withSpan(
+    { kind: "CHAIN", name: "reflectOnFlaggedRun" },
+    async (p) => {
+      if (tensormuxConfigured()) {
+        try {
+          return await tensormuxReflect(p);
+        } catch (err) {
+          console.warn(
+            "[reflection] TensorMux reflection failed — using offline fallback:",
+            err instanceof Error ? err.message : err,
+          );
+          return offlineReflect(p);
+        }
       }
-    }
-    return offlineReflect(params);
-  });
+      return offlineReflect(p);
+    },
+    params,
+  );
 }
 
 export { toolDescription };

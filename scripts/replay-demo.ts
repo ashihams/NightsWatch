@@ -26,7 +26,7 @@ import { dirname, resolve } from "node:path";
 import { initObservability, shutdownObservability } from "../agent/src/observability.js";
 import { runOnePlanner, type PlannerRunResult } from "../agent/src/runPlanner.js";
 import {
-  clearLocalSemanticStore,
+  clearSemanticStore,
   closeSemanticMemory,
   semanticFallbackPath,
 } from "../agent/src/semanticMemory.js";
@@ -38,7 +38,7 @@ import type { ToolCallResult } from "../agent/src/tools.js";
 /** Written for the demo dashboard (`npm run dashboard`). */
 export const REPLAY_TRAJECTORY_PATH = "./data/replay-demo/trajectory.json";
 
-config({ path: resolve(process.cwd(), ".env") });
+config({ path: resolve(process.cwd(), ".env"), override: true });
 
 type ScenarioLabel = "seen_a" | "seen_b" | "unseen";
 
@@ -284,7 +284,7 @@ function evaluateImprovement(rows: TrajectoryRow[]): ImprovementSignal[] {
   ];
 }
 
-function prepareDemoStores(): void {
+async function prepareDemoStores(): Promise<void> {
   // Isolate demo SQLite / lesson files under data/replay-demo/
   process.env.WORKING_DB_PATH =
     process.env.REPLAY_WORKING_DB_PATH || "./data/replay-demo/working.sqlite";
@@ -305,22 +305,35 @@ function prepareDemoStores(): void {
     process.env.STRATEGY_MIN_CONFIDENCE = "0.95";
   }
 
-  // Prefer clean local fallback unless Neo4j is fully configured.
-  if (
-    !(process.env.NEO4J_URI || "").trim() ||
-    !(process.env.NEO4J_USER || "").trim() ||
-    !(process.env.NEO4J_PASSWORD || "").trim()
-  ) {
-    clearLocalSemanticStore();
-    console.log(
-      JSON.stringify({
-        type: "replay_demo_reset",
-        store: semanticFallbackPath(),
-        working_db: process.env.WORKING_DB_PATH,
-        episodic_db: process.env.EPISODIC_DB_PATH,
-      }),
-    );
+  // Offline planner only when REPLAY_USE_OFFLINE=1.
+  // Default 0: keep TensorMux + Neatlogs for live demo runs.
+  const useOffline = /^(1|true|yes|on)$/i.test(
+    process.env.REPLAY_USE_OFFLINE || "0",
+  );
+  if (useOffline) {
+    process.env.TENSORMUX_BASE_URL = "";
+    process.env.TENSORMUX_API_KEY = "";
   }
+
+  const neatlogsOn = Boolean((process.env.NEATLOGS_API_KEY || "").trim());
+
+  // Clean semantic store (Neo4j Aura labels and/or local JSON) for a fresh spine.
+  await clearSemanticStore();
+  console.log(
+    JSON.stringify({
+      type: "replay_demo_reset",
+      store: semanticFallbackPath(),
+      working_db: process.env.WORKING_DB_PATH,
+      episodic_db: process.env.EPISODIC_DB_PATH,
+      offline_planner: useOffline,
+      neatlogs: neatlogsOn,
+      neo4j: Boolean(
+        (process.env.NEO4J_URI || "").trim() &&
+          (process.env.NEO4J_USER || "").trim() &&
+          (process.env.NEO4J_PASSWORD || "").trim(),
+      ),
+    }),
+  );
 }
 
 async function pingTools(): Promise<void> {
@@ -334,20 +347,20 @@ async function pingTools(): Promise<void> {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ query: "ping" }),
     });
-    // Any HTTP response means the mock server is up.
+    // Any HTTP response means tools are up (n8n workflows or Node mock).
     if (res.status < 100) {
       throw new Error(`HTTP ${res.status}`);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
-      `Mock tools not reachable at ${base} (${msg}). Start them with: npm run tools`,
+      `CRM tools not reachable at ${base} (${msg}). Start n8n (npm run n8n:up) or mock (npm run tools).`,
     );
   }
 }
 
 async function main(): Promise<void> {
-  prepareDemoStores();
+  await prepareDemoStores();
   await pingTools();
   await initObservability();
 

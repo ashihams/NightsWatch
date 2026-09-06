@@ -1,34 +1,108 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Nights Watch — demo dashboard</title>
+    <title>LOOP // DEMO FEED</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Orbitron:wght@600;700;800;900&family=Share+Tech+Mono&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <header>
-      <h1>Nights Watch</h1>
-      <p class="sub">
-        Learning trajectory + semantic lessons
-        <span id="status" class="status">loading…</span>
-      </p>
-    </header>
+    <div class="cyber-bg" aria-hidden="true"></div>
+    <div class="cyber-scanlines" aria-hidden="true"></div>
+    <div class="cyber-scan-beam" aria-hidden="true"></div>
 
-    <main>
-      <section aria-labelledby="traj-heading">
-        <h2 id="traj-heading">Trajectory</h2>
-        <p class="hint">seen_a → seen_b → unseen from the latest <code>npm run replay:demo</code></p>
-        <div id="trajectory-panel" class="panel">Loading…</div>
-      </section>
+    <div class="shell">
+      <header class="hero">
+        <p class="eyebrow">
+          <span class="prompt">&gt;</span> SYS.LOOP / DEMO_DASHBOARD
+          <span class="cursor" aria-hidden="true"></span>
+        </p>
+        <h1 class="cyber-glitch" data-text="LOOP">LOOP</h1>
+        <p class="lede">
+          Agent learning feed — trajectory spine, semantic lessons, live stack
+          <span id="status" class="status">boot…</span>
+        </p>
+        <div class="hero-meta">
+          <button id="run-demo" type="button" class="btn-glitch">RUN DEMO</button>
+          <span class="chip" id="phase-chip">IDLE</span>
+          <span class="chip chip-mag">NEON_GRAPH</span>
+          <span class="chip chip-cyan">LIVE_SSE</span>
+        </div>
+      </header>
 
-      <section aria-labelledby="lessons-heading">
-        <h2 id="lessons-heading">Lessons</h2>
-        <p class="hint">Usable = evidence_count ≥ 2 · Pending = candidates still gathering evidence</p>
-        <div id="lessons-panel" class="panel">Loading…</div>
-      </section>
-    </main>
+      <main>
+        <section class="block" aria-labelledby="live-heading">
+          <div class="section-head">
+            <h2 id="live-heading"><span class="prompt">&gt;</span> LIVE_RUN</h2>
+            <p class="hint">streams <code>replay:demo</code> · seen_a → seen_b → unseen</p>
+          </div>
+          <div class="phase-row" id="phase-row" aria-label="Demo phases">
+            <span class="phase" data-phase="boot">boot</span>
+            <span class="phase" data-phase="seen_a">seen_a</span>
+            <span class="phase" data-phase="seen_b">seen_b</span>
+            <span class="phase" data-phase="unseen">unseen</span>
+            <span class="phase" data-phase="done">done</span>
+          </div>
+          <div id="live-panel" class="panel cyber-chamfer terminal">
+            <div class="terminal-bar" aria-hidden="true">
+              <span class="dot red"></span><span class="dot yel"></span><span class="dot grn"></span>
+              <span class="bar-label">demo.console</span>
+            </div>
+            <pre id="live-console" class="live-console" aria-live="polite"><span class="prompt">&gt;</span> waiting for RUN DEMO…</pre>
+          </div>
+        </section>
 
-    <script src="/app.js"></script>
+        <section class="block" aria-labelledby="stack-heading">
+          <div class="section-head">
+            <h2 id="stack-heading"><span class="prompt">&gt;</span> STACK_STATUS</h2>
+            <p class="hint">tools · neo4j · embeds · tensormux · otel/neatlogs</p>
+          </div>
+          <div id="stack-panel" class="panel cyber-chamfer holographic">
+            <div class="terminal-bar" aria-hidden="true">
+              <span class="dot red"></span><span class="dot yel"></span><span class="dot grn"></span>
+              <span class="bar-label">stack.probe</span>
+            </div>
+            <div class="panel-body">Loading…</div>
+          </div>
+        </section>
+
+        <section class="block skew-soft" aria-labelledby="traj-heading">
+          <div class="section-head">
+            <h2 id="traj-heading"><span class="prompt">&gt;</span> TRAJECTORY</h2>
+            <p class="hint">seen_a → seen_b → unseen · <code>npm run replay:demo</code></p>
+          </div>
+          <div id="trajectory-panel" class="panel cyber-chamfer terminal">
+            <div class="terminal-bar" aria-hidden="true">
+              <span class="dot red"></span><span class="dot yel"></span><span class="dot grn"></span>
+              <span class="bar-label">replay.spine</span>
+            </div>
+            <div class="panel-body">Loading…</div>
+          </div>
+        </section>
+
+        <section class="block" aria-labelledby="lessons-heading">
+          <div class="section-head">
+            <h2 id="lessons-heading"><span class="prompt">&gt;</span> LESSONS</h2>
+            <p class="hint">usable ≥2 evidence · pending candidates · neo4j when live</p>
+          </div>
+          <div id="lessons-panel" class="panel cyber-chamfer">
+            <div class="panel-body">Loading…</div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="foot">
+        <span class="prompt">&gt;</span> LOOP // high-tech low-life learning loop
+        <span class="cursor" aria-hidden="true"></span>
+      </footer>
+    </div>
+
+    <script src="/app.js?v=2"></script>
   </body>
 </html>

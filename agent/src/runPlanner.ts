@@ -53,6 +53,10 @@ import {
   strategyInjectionEnabled,
 } from "./strategy.js";
 import type { AnalyzeRunResult, NormalizedToolCall } from "./analyzer.js";
+import {
+  computeLoopEvalMetrics,
+  formatEvalMetricsForTrace,
+} from "./evalMetrics.js";
 
 export type PlannerRunResult = {
   task: string;
@@ -419,12 +423,13 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
     finalMessage: string;
     runStatus: "complete" | "failed";
     latencyMs: number;
+    evalMetrics?: Record<string, unknown>;
   };
 
   let core: CoreResult;
 
   try {
-    core = await withPlannerWorkflow({ runId, task, mode }, async () => {
+    core = await withPlannerWorkflow({ runId, task, mode }, async (_meta) => {
       // Semantic lessons first; episodic only when nothing strong was injected.
       await maybeInjectStrategyLessons(runId, task);
       await maybeInjectEpisodicContext(runId, task);
@@ -486,7 +491,28 @@ export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
         latencyMs,
       });
 
-      return { finalMessage, runStatus, latencyMs };
+      const evalMetrics = formatEvalMetricsForTrace(
+        computeLoopEvalMetrics({
+          latencyMs,
+          toolCalls: toolCalls.map((c) => ({
+            name: c.name,
+            ok: c.ok,
+            status: c.status,
+            latencyMs: c.latencyMs,
+            body: c.body,
+          })),
+        }),
+      );
+
+      console.log(
+        JSON.stringify({
+          type: "loop_eval_metrics",
+          run_id: runId,
+          ...evalMetrics,
+        }),
+      );
+
+      return { finalMessage, runStatus, latencyMs, evalMetrics };
     });
   } catch (err) {
     finishWorkingRun(runId, "failed");

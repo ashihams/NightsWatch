@@ -412,15 +412,18 @@ function pickTraceId(
   runId: string,
 ): string | undefined {
   if (traces.length === 0) return undefined;
+  const needle = runId.toLowerCase();
   const byRun = traces.find((t) => {
     const blob = JSON.stringify(t).toLowerCase();
-    return blob.includes(runId.toLowerCase());
+    return blob.includes(needle);
   });
-  const chosen = byRun || traces[0];
+  // Never accept an unrelated first hit — that falsely binds the analyzer to an
+  // older support-agent-planner trace and skips log_trace fallback.
+  if (!byRun) return undefined;
   return (
-    (typeof chosen.trace_id === "string" && chosen.trace_id) ||
-    (typeof chosen.traceId === "string" && chosen.traceId) ||
-    (typeof chosen.id === "string" && chosen.id) ||
+    (typeof byRun.trace_id === "string" && byRun.trace_id) ||
+    (typeof byRun.traceId === "string" && byRun.traceId) ||
+    (typeof byRun.id === "string" && byRun.id) ||
     undefined
   );
 }
@@ -537,14 +540,24 @@ async function pushAnalyzerTrace(params: {
       name: "runOnePlanner",
       span_type: "WORKFLOW",
       status: params.success ? "success" : "error",
-      input: { run_id: params.runId, task: params.task },
-      output: { tool_call_count: params.toolCalls.length },
+      input: {
+        run_id: params.runId,
+        task: params.task,
+        search_text: `loop.run_id ${params.runId} ${params.task}`,
+      },
+      output: {
+        tool_call_count: params.toolCalls.length,
+        loop_run_id: params.runId,
+        search_text: `loop.run_id ${params.runId}`,
+      },
       latency_ms: params.latencyMs,
       metadata: {
+        loop_run_id: params.runId,
         nights_watch_run_id: params.runId,
         workflow: workflowName(),
         llm_gateway: "tensormux",
         source: "analyzer_log_trace",
+        product: "loop",
       },
       start_time: started,
     },
@@ -563,6 +576,7 @@ async function pushAnalyzerTrace(params: {
       latency_ms: c.latencyMs,
       metadata: {
         tool_name: c.name,
+        loop_run_id: params.runId,
         nights_watch_run_id: params.runId,
       },
       start_time: started,
@@ -575,11 +589,12 @@ async function pushAnalyzerTrace(params: {
     {
       // Live MCP schema requires workflow_name (docs examples used `name` only).
       workflow_name: workflowName(),
-      name: `nights-watch:${params.runId}`,
+      name: `loop:${params.runId}`,
       spans,
       metadata: {
-        framework: "nights-watch",
+        framework: "loop",
         agent_name: "support-agent-planner",
+        loop_run_id: params.runId,
         nights_watch_run_id: params.runId,
         tensormux: Boolean((process.env.TENSORMUX_BASE_URL || "").trim()),
       },
@@ -634,7 +649,7 @@ export async function tryLoadNeatlogsToolCalls(options: {
     const init = await mcpCall(null, "initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "nights-watch-analyzer", version: "0.2.0" },
+      clientInfo: { name: "loop-analyzer", version: "0.3.0" },
     });
     sessionId = init.sessionId;
     if (!init.ok) {
@@ -692,6 +707,7 @@ export async function tryLoadNeatlogsToolCalls(options: {
       options.runId,
       `${workflowName()} ${options.runId}`,
       `runOnePlanner ${options.runId}`,
+      `loop.run_id ${options.runId}`,
       `nights_watch.run_id ${options.runId}`,
       workflowName(),
       "runOnePlanner",
@@ -1003,15 +1019,35 @@ export function detectionNamesToTriggers(
   const seen = new Set<string>();
   for (const d of detections) {
     if (d.source === "project_catalog") continue; // catalog ≠ fired
-    const n = d.name.toLowerCase();
-    let mapped = `neatlogs_detection:${n}`;
-    if (n.includes("tool_failure") || n.includes("error_detected")) {
+    const n = `${d.name} ${d.display_name || ""}`.toLowerCase();
+    let mapped = `neatlogs_detection:${(d.display_name || d.name).toLowerCase()}`;
+    if (
+      n.includes("tool_failure") ||
+      n.includes("error_detected") ||
+      n.includes("execution failed") ||
+      n.includes("ok:false") ||
+      n.includes("unscoped") ||
+      n.includes("missing_customer_id")
+    ) {
       mapped = "tool_failure";
     } else if (n.includes("tool_contract") || n.includes("misuse")) {
       mapped = "tool_failure";
-    } else if (n.includes("latency")) {
+    } else if (
+      n.includes("latency") ||
+      n.includes("slow llm") ||
+      n.includes("expensive")
+    ) {
       mapped = "high_latency";
-    } else if (n.includes("orchestration")) {
+    } else if (
+      n.includes("retry") ||
+      n.includes("duplicate")
+    ) {
+      mapped = "duplicate_tool_call";
+    } else if (
+      n.includes("orchestration") ||
+      n.includes("novel tool sequence") ||
+      n.includes("drift")
+    ) {
       mapped = "novel_tool_sequence";
     }
     if (!seen.has(mapped)) {

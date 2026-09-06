@@ -40,7 +40,7 @@ function client(): OpenAI {
     apiKey: process.env.TENSORMUX_API_KEY!,
     baseURL: process.env.TENSORMUX_BASE_URL!,
     defaultHeaders: {
-      "X-Nights-Watch-Client": "support-agent-planner",
+      "X-loop-Client": "support-agent-planner",
     },
   });
   return maybeWrapOpenAI(raw);
@@ -60,14 +60,17 @@ export async function planNextStep(
   history: LlmMessage[],
   lessonBlock?: string,
 ): Promise<PlannerAction> {
-  return withSpan({ kind: "AGENT", name: "planNextStep" }, async () => {
+  // Pass task into the span so Neatlogs AGENT input is non-empty.
+  return withSpan(
+    { kind: "AGENT", name: "planNextStep" },
+    async (agentInput) => {
     const systemContent = lessonBlock?.trim()
       ? `${SYSTEM}\n\n${lessonBlock.trim()}`
       : SYSTEM;
     const messages: LlmMessage[] = [
       { role: "system", content: systemContent },
-      { role: "user", content: task },
-      ...history,
+      { role: "user", content: agentInput.task },
+      ...agentInput.history,
     ];
 
     const model = process.env.TENSORMUX_MODEL || "gpt-4o-mini";
@@ -138,7 +141,9 @@ export async function planNextStep(
       type: "finish",
       message: (msg.content || "").trim() || "Done.",
     };
-  });
+  },
+    { task, history },
+  );
 }
 
 export function assistantToolStub(

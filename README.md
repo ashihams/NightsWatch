@@ -1,4 +1,4 @@
-# Nights Watch
+﻿# Loop
 
 Agent that learns how to use third-party tools over repeated runs.
 
@@ -9,9 +9,10 @@ Built with Agent Orchestrator (AO).
 ## Quick start
 
 ```bash
-# Terminal 1 — mock CRM webhooks
-npm install
-npm run tools
+# Terminal 1 — CRM tools (pick one)
+npm run tools          # mock Node server (fixture CRM data)
+# OR real n8n engine + same fixture CRM payloads:
+# npm run n8n:up && npm run n8n:import
 
 # Terminal 2 — one planner run (offline if TensorMux env unset)
 npm run agent
@@ -22,19 +23,19 @@ npm run agent
 # Deterministic analyzer proof (flagged naive vs clean)
 npm run analyzer:prove
 
-# Two-run lesson promotion (candidate → usable)
+# Two-run lesson promotion (candidate → usable) — writes Neo4j when configured
 npm run reflection:prove
 
 # Strategy injection: naive vs injected unseen task
 npm run strategy:prove
 
 # Demo spine — seen_a / seen_b / unseen trajectory (Step 9)
-# Requires mock tools already running (Terminal 1).
+# Uses n8n or mock on :5678; Neo4j lessons when NEO4J_* set; offline planner by default
 npm run replay:demo
 
-# Demo dashboard — trajectory table + lessons feed (Step 10)
+# Demo dashboard — stack status + trajectory + lessons (Step 10)
 npm run dashboard
-# open http://localhost:3847
+# open http://localhost:3847  → /api/stack · /api/trajectory · /api/lessons
 
 # Inspect stores
 npm run working:list
