@@ -34,7 +34,7 @@ function apiKey(): string {
 }
 
 function workflowName(): string {
-  return process.env.NEATLOGS_WORKFLOW_NAME || "nights-watch-agent";
+  return process.env.NEATLOGS_WORKFLOW_NAME || "support-agent-planner";
 }
 
 type JsonRpcResponse = {

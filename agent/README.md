@@ -245,7 +245,7 @@ Init once in `src/observability.ts` at the start of `src/index.ts`.
 | `NEATLOGS_API_KEY` | Project API key from [app.neatlogs.com](https://app.neatlogs.com) |
 | `NEATLOGS_ENDPOINT` | Optional ingest base URL |
 | `NEATLOGS_MCP_URL` | Optional MCP URL for analyzer reads |
-| `NEATLOGS_WORKFLOW_NAME` | Optional workflow label (default `nights-watch-agent`) |
+| `NEATLOGS_WORKFLOW_NAME` | Optional workflow label (default `support-agent-planner`) |
 
 **Missing key:** tracing skipped with a warning; agent continues.
 
