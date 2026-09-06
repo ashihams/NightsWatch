@@ -6,11 +6,19 @@
   "scripts": {
     "tools": "node tools/mock-server/index.js",
     "mock-server": "node tools/mock-server/index.js",
-    "n8n:up": "docker compose -f infra/n8n/docker-compose.yml up -d",
-    "n8n:down": "docker compose -f infra/n8n/docker-compose.yml down",
-    "n8n:import": "powershell -NoProfile -ExecutionPolicy Bypass -File infra/n8n/import-workflows.ps1"
+    "agent": "tsx agent/src/index.ts",
+    "agent:build": "tsc -p agent/tsconfig.json"
   },
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "openai": "^4.86.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
   }
 }

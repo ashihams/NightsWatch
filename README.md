@@ -1,4 +1,4 @@
-# Nights Watch
+﻿# Nights Watch
 
 Agent that learns how to use third-party tools over repeated runs.
 
@@ -6,10 +6,15 @@ Agent that learns how to use third-party tools over repeated runs.
 
 Built with Agent Orchestrator (AO).
 
-## Quick start (tools layer)
+## Quick start
 
 ```bash
+# Terminal 1 — mock CRM webhooks
+npm install
 npm run tools
+
+# Terminal 2 — one planner run (offline if TensorMux env unset)
+npm run agent
 ```
 
-Mock CRM/support webhooks on **http://localhost:5678**. See [`tools/README.md`](tools/README.md) for endpoints, curl examples, and the `customer_id` dependency the agent must learn.
+See `tools/README.md` for webhook contracts and `agent/README.md` for the planner / AO entrypoint.

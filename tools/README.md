@@ -1,6 +1,6 @@
 # Tools layer (CRM / support webhooks)
 
-Third-party-style tools the Loop agent will learn to call. For local demos, run the **mock server** (no n8n cloud required). Optional n8n workflow JSON under `../n8n-workflows/` mirrors the same webhook paths if you prefer n8n.
+Third-party-style tools the Nights Watch agent will learn to call. For local demos, run the **mock server** (no n8n cloud required). Optional n8n workflow JSON under `../n8n-workflows/` mirrors the same webhook paths if you prefer n8n.
 
 ## Start the mock server
 
@@ -114,18 +114,6 @@ Example orders: `ord_5001`/`ord_5002` → `cust_1001`; `ord_5003` → `cust_1002
 
 ---
 
-# n8n (optional)
+## n8n (optional)
 
-Import JSON from `n8n-workflows/` into n8n. Webhook paths match `/webhook/<tool_name>`.
-
-**Local Docker (recommended for “real n8n”):**
-
-```powershell
-# stop mock if it owns :5678
-npm run n8n:up
-npm run n8n:import
-```
-
-Keep `TOOLS_BASE_URL=http://127.0.0.1:5678`. UI: http://127.0.0.1:5678 — see `infra/n8n/README.md`.
-
-For offline demos without Docker, prefer `npm run tools` (mock).
+Import JSON from `n8n-workflows/` into n8n. Webhook paths match `/webhook/<tool_name>`. For hackathon demos, prefer `npm run tools` so you are not blocked on n8n cloud.
