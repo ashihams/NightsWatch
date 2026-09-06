@@ -230,12 +230,16 @@ Requires Node with built-in `node:sqlite` (Node ≥ 22.5). The `data/` directory
 |-----|---------|
 | `EPISODIC_DB_PATH` | SQLite path (default `./data/episodic.sqlite`) |
 | `EPISODIC_RETRIEVE_K` | Top-k nearest episodes to inject (default `3`) |
-| `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | Optional API embeddings; blank → offline hash |
+| `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | OpenAI-compatible embeds (local Ollama or cloud) |
+| `OLLAMA_BASE_URL` | Used when `EMBEDDING_BASE_URL` is unset (default `http://127.0.0.1:11434`) |
+| `EMBEDDING_FORCE_OFFLINE` | Force hash-bow-256 (skip API/Ollama) |
 
-**Run-start injection:** if `injected_context` has no `semantic_lesson` entries, query episodic memory and store hits as soft context.
+**Priority:** configured API → local Ollama (`nomic-embed-text`) → offline `hash-bow-256`. Retrieve only compares same backend + dim; after switching models, run `npm run episodic:reembed`.
 
 ```bash
+ollama pull nomic-embed-text
 npm run episodic:list
+npm run episodic:reembed
 ```
 
 ## Neatlogs observability
@@ -253,7 +257,7 @@ Init once in `src/observability.ts` at the start of `src/index.ts`.
 
 **Missing key:** tracing skipped with a warning; agent continues.
 
-**With key + TensorMux:** one `WORKFLOW` root (`runOnePlanner`) stamped with `nights_watch.run_id` + TensorMux host/model; nested `AGENT` / `LLM` (via `wrapOpenAI` → TensorMux `/v1`) / `TOOL` spans. Analyzer flushes, then MCP-reads (or `log_trace` snapshot) before reflection. Enable detections in the Neatlogs dashboard to surface eval badges into analyzer triggers.
+**With key + TensorMux:** one `WORKFLOW` root (`runOnePlanner`) stamped with `loop.run_id` + TensorMux host/model; nested `AGENT` / `LLM` (via `wrapOpenAI` → TensorMux `/v1`) / `TOOL` spans. Each run stamps `loop_eval` metrics (`speed_score`, `latency_ms`, `robustness_score`, `token_*`, `drift_signals`) on WORKFLOW output. Analyzer flushes, then MCP-reads (or `log_trace` snapshot) before reflection. Drift detections are created via `npm run neatlogs:detections`; create the Evals campaign from `neatlogs/evals-loop-rubric.md` (MCP cannot create evals).
 
 ## TensorMux (LLM path)
 

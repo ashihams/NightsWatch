@@ -10,6 +10,7 @@
     "agent:build": "tsc -p agent/tsconfig.json",
     "working:list": "tsx agent/src/listWorking.ts",
     "episodic:list": "tsx agent/src/listEpisodic.ts",
+    "episodic:reembed": "tsx scripts/reembed-episodes.ts",
     "analyzer:prove": "tsx agent/src/proveAnalyzer.ts",
     "reflection:prove": "tsx agent/src/proveReflection.ts",
     "strategy:prove": "tsx agent/src/proveStrategy.ts",

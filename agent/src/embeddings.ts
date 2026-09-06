@@ -1,19 +1,21 @@
 /**
- * Text → embedding vector.
+ * Text → embedding vector for episodic memory.
  *
- * Default (hackathon / free-tier): deterministic bag-of-words hash embedding —
- * no API key, works fully offline.
+ * Priority:
+ *   1. EMBEDDING_BASE_URL (+ optional key) — OpenAI-compatible /v1/embeddings
+ *   2. Local Ollama when reachable (nomic-embed-text by default)
+ *   3. Offline bag-of-words hash (hash-bow-256) — never blocks demos
  *
- * Optional: OpenAI-compatible embeddings when EMBEDDING_BASE_URL + EMBEDDING_API_KEY
- * are set (TensorMux or another gateway). On API failure, falls back to offline.
+ * API / Ollama failures fall back to offline.
  */
 
 import OpenAI from "openai";
+import { withSpan } from "./observability.js";
 
 /** Fixed dim for offline hash embeddings (stable across runs). */
 export const OFFLINE_EMBED_DIM = 256;
 
-export type EmbedBackend = "offline" | "api";
+export type EmbedBackend = "offline" | "api" | "ollama";
 
 export type EmbeddingResult = {
   vector: number[];
@@ -66,49 +68,189 @@ export function offlineEmbed(text: string, dim = OFFLINE_EMBED_DIM): number[] {
   return l2Normalize(vec);
 }
 
-export function embeddingApiConfigured(): boolean {
-  const base = (process.env.EMBEDDING_BASE_URL || "").trim();
-  const key = (process.env.EMBEDDING_API_KEY || "").trim();
-  return Boolean(base && key);
+function ollamaBaseUrl(): string {
+  return (
+    process.env.OLLAMA_BASE_URL ||
+    process.env.OLLAMA_HOST ||
+    "http://127.0.0.1:11434"
+  ).replace(/\/+$/, "");
 }
 
-async function apiEmbed(text: string): Promise<EmbeddingResult> {
-  const model = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
+function ollamaEmbedModel(): string {
+  return (
+    process.env.EMBEDDING_MODEL ||
+    process.env.OLLAMA_EMBED_MODEL ||
+    "nomic-embed-text"
+  ).trim();
+}
+
+/** Explicit OpenAI-compatible embed endpoint configured. */
+export function embeddingApiConfigured(): boolean {
+  return Boolean((process.env.EMBEDDING_BASE_URL || "").trim());
+}
+
+/** Prefer local Ollama embeds unless EMBEDDING_FORCE_OFFLINE=1. */
+export function ollamaEmbedEnabled(): boolean {
+  if (/^(1|true|yes|on)$/i.test(process.env.EMBEDDING_FORCE_OFFLINE || "")) {
+    return false;
+  }
+  if (/^(0|false|no|off)$/i.test(process.env.EMBEDDING_USE_OLLAMA || "1")) {
+    return false;
+  }
+  return true;
+}
+
+async function openAiCompatibleEmbed(
+  text: string,
+  opts: { baseURL: string; apiKey: string; model: string; backend: EmbedBackend },
+): Promise<EmbeddingResult> {
   const client = new OpenAI({
-    apiKey: process.env.EMBEDDING_API_KEY!,
-    baseURL: process.env.EMBEDDING_BASE_URL!,
+    apiKey: opts.apiKey,
+    baseURL: opts.baseURL.replace(/\/+$/, ""),
   });
-  const res = await client.embeddings.create({ model, input: text });
+  const res = await client.embeddings.create({
+    model: opts.model,
+    input: text,
+  });
   const vector = res.data[0]?.embedding;
   if (!vector || vector.length === 0) {
     throw new Error("empty embedding response");
   }
-  return { vector: l2Normalize(vector), backend: "api", model };
+  return {
+    vector: l2Normalize(vector),
+    backend: opts.backend,
+    model: opts.model,
+  };
 }
 
-/**
- * Embed text. Uses API when configured; otherwise offline hash embedding.
- * API errors fall back to offline so demos never block on embed keys.
- */
-export async function embedText(text: string): Promise<EmbeddingResult> {
-  if (embeddingApiConfigured()) {
-    try {
-      return await apiEmbed(text);
-    } catch (err) {
-      console.log(
-        JSON.stringify({
-          type: "embed_fallback",
-          reason: err instanceof Error ? err.message : String(err),
-          backend: "offline",
-        }),
+async function apiEmbed(text: string): Promise<EmbeddingResult> {
+  const model = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
+  const baseURL = process.env.EMBEDDING_BASE_URL!;
+  const apiKey =
+    (process.env.EMBEDDING_API_KEY || "").trim() || "local-embeddings";
+  return openAiCompatibleEmbed(text, {
+    baseURL,
+    apiKey,
+    model,
+    backend: "api",
+  });
+}
+
+async function ollamaEmbed(text: string): Promise<EmbeddingResult> {
+  const model = ollamaEmbedModel();
+  const base = ollamaBaseUrl();
+  // Prefer OpenAI-compat /v1/embeddings; fall back to native /api/embeddings.
+  try {
+    return await openAiCompatibleEmbed(text, {
+      baseURL: `${base}/v1`,
+      apiKey: (process.env.EMBEDDING_API_KEY || "").trim() || "ollama",
+      model,
+      backend: "ollama",
+    });
+  } catch (openaiErr) {
+    const res = await fetch(`${base}/api/embeddings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, prompt: text }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!res.ok) {
+      throw new Error(
+        `ollama native embed ${res.status}: ${openaiErr instanceof Error ? openaiErr.message : openaiErr}`,
       );
     }
+    const json = (await res.json()) as { embedding?: number[] };
+    if (!json.embedding?.length) {
+      throw new Error("empty ollama native embedding");
+    }
+    return {
+      vector: l2Normalize(json.embedding),
+      backend: "ollama",
+      model,
+    };
   }
+}
+
+function offlineResult(text: string): EmbeddingResult {
   return {
     vector: offlineEmbed(text),
     backend: "offline",
     model: `hash-bow-${OFFLINE_EMBED_DIM}`,
   };
+}
+
+/**
+ * Embed text. Uses configured API, else local Ollama, else offline hash.
+ * Never throws — falls back so demos never block on embed infra.
+ */
+export async function embedText(text: string): Promise<EmbeddingResult> {
+  return withSpan(
+    {
+      kind: "EMBEDDING",
+      name: "embedText",
+    },
+    async (input) => {
+      if (embeddingApiConfigured()) {
+        try {
+          const out = await apiEmbed(input);
+          console.log(
+            JSON.stringify({
+              type: "embed_ok",
+              backend: out.backend,
+              model: out.model,
+              dim: out.vector.length,
+            }),
+          );
+          return out;
+        } catch (err) {
+          console.log(
+            JSON.stringify({
+              type: "embed_fallback",
+              from: "api",
+              reason: err instanceof Error ? err.message : String(err),
+              next: ollamaEmbedEnabled() ? "ollama" : "offline",
+            }),
+          );
+        }
+      }
+
+      if (ollamaEmbedEnabled()) {
+        try {
+          const out = await ollamaEmbed(input);
+          console.log(
+            JSON.stringify({
+              type: "embed_ok",
+              backend: out.backend,
+              model: out.model,
+              dim: out.vector.length,
+            }),
+          );
+          return out;
+        } catch (err) {
+          console.log(
+            JSON.stringify({
+              type: "embed_fallback",
+              from: "ollama",
+              reason: err instanceof Error ? err.message : String(err),
+              next: "offline",
+            }),
+          );
+        }
+      }
+
+      const out = offlineResult(input);
+      console.log(
+        JSON.stringify({
+          type: "embed_ok",
+          backend: out.backend,
+          model: out.model,
+          dim: out.vector.length,
+        }),
+      );
+      return out;
+    },
+    text,
+  );
 }
 
 /** Cosine similarity for L2-normalized (or raw) vectors; returns 0 if dims differ. */
