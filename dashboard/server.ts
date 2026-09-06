@@ -49,10 +49,13 @@ function pointAtReplayDemoStores(): void {
 }
 
 function trajectoryPath(): string {
-  return resolve(
+  const preferred = resolve(
     process.cwd(),
     process.env.REPLAY_TRAJECTORY_PATH || "./data/replay-demo/trajectory.json",
   );
+  if (existsSync(preferred)) return preferred;
+  // Bundled snapshot for Vercel / fresh clones (data/ is gitignored).
+  return resolve(process.cwd(), "dashboard/fixtures/trajectory.json");
 }
 
 function toolsBaseUrl(): string {
@@ -175,7 +178,18 @@ function attachLineBuffer(
   });
 }
 
+function isVercel(): boolean {
+  return Boolean(process.env.VERCEL);
+}
+
 function startDemoRun(): { ok: boolean; error?: string } {
+  if (isVercel()) {
+    return {
+      ok: false,
+      error:
+        "RUN DEMO is local-only on Vercel (needs n8n/Ollama/TensorMux). Run npm run dashboard locally, or view Neo4j lessons + last trajectory here.",
+    };
+  }
   if (demoState.running) {
     return { ok: false, error: "demo already running" };
   }
@@ -527,10 +541,14 @@ function serveStatic(reqPath: string, res: ServerResponse): void {
   res.end(readFileSync(file));
 }
 
-async function handle(
+export async function handle(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
+  if (!process.env.__LOOP_DASHBOARD_STORES) {
+    pointAtReplayDemoStores();
+    process.env.__LOOP_DASHBOARD_STORES = "1";
+  }
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   const path = url.pathname;
 
@@ -651,8 +669,11 @@ async function main(): Promise<void> {
   process.on("SIGTERM", shutdown);
 }
 
-main().catch(async (err) => {
-  console.error(err);
-  await closeSemanticMemory().catch(() => undefined);
-  process.exit(1);
-});
+// Local long-running server only; Vercel uses api/index.ts → handle().
+if (!process.env.VERCEL && process.argv[1]?.includes("dashboard/server")) {
+  main().catch(async (err) => {
+    console.error(err);
+    await closeSemanticMemory().catch(() => undefined);
+    process.exit(1);
+  });
+}

@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "nights-watch-ao",
   "version": "0.1.0",
   "private": true,
@@ -28,6 +28,7 @@
     "node": ">=22.5"
   },
   "dependencies": {
+    "@vercel/node": "^5.3.24",
     "dotenv": "^16.4.7",
     "neatlogs": "^1.1.19",
     "neo4j-driver": "^5.28.3",
