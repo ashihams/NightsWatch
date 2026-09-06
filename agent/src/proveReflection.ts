@@ -10,30 +10,25 @@ import { resolve } from "node:path";
 import { initObservability, shutdownObservability } from "./observability.js";
 import { runOnePlanner } from "./runPlanner.js";
 import {
-  clearLocalSemanticStore,
+  clearSemanticStore,
   closeSemanticMemory,
   listLessons,
-  semanticFallbackPath,
 } from "./semanticMemory.js";
 
 config({ path: resolve(process.cwd(), ".env") });
 
+/** Deterministic prove path: offline planner + working-memory analyzer + offline reflection. */
+function forceOfflineProveMode(): void {
+  process.env.TENSORMUX_BASE_URL = "";
+  process.env.TENSORMUX_API_KEY = "";
+  process.env.NEATLOGS_API_KEY = "";
+  process.env.STRATEGY_INJECTION = "0";
+}
+
 async function main(): Promise<void> {
-  // Force a clean local prove (even if Neo4j is configured, clear local; Neo4j
-  // lessons still accumulate by situation id — local fallback is the offline demo path).
-  if (
-    !(process.env.NEO4J_URI || "").trim() ||
-    !(process.env.NEO4J_USER || "").trim() ||
-    !(process.env.NEO4J_PASSWORD || "").trim()
-  ) {
-    clearLocalSemanticStore();
-    console.log(
-      JSON.stringify({
-        type: "prove_reflection_reset",
-        store: semanticFallbackPath(),
-      }),
-    );
-  }
+  forceOfflineProveMode();
+  // Clean slate so run1 is always candidate and run2 promotes the same lesson.
+  await clearSemanticStore();
 
   await initObservability();
 

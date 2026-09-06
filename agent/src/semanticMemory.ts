@@ -506,3 +506,51 @@ export function clearLocalSemanticStore(): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify({ runs: {}, lessons: {} }, null, 2)}\n`, "utf8");
 }
+
+/**
+ * Reset semantic memory for prove scripts: local JSON + Neo4j Loop labels.
+ * Never deletes unrelated Aura data outside Run/Situation/Lesson/Factor/Tool.
+ */
+export async function clearSemanticStore(): Promise<void> {
+  clearLocalSemanticStore();
+  if (!neo4jConfigured() || preferLocal) {
+    console.log(
+      JSON.stringify({
+        type: "semantic_store_reset",
+        backend: "local_fallback",
+        path: fallbackPath(),
+      }),
+    );
+    return;
+  }
+
+  const schemaOk = await ensureSchema();
+  if (!schemaOk) {
+    console.log(
+      JSON.stringify({
+        type: "semantic_store_reset",
+        backend: "local_fallback",
+        path: fallbackPath(),
+        note: "neo4j unreachable; cleared local only",
+      }),
+    );
+    return;
+  }
+
+  await withSession(async (session) => {
+    await session.run(`
+      MATCH (n)
+      WHERE n:Run OR n:Situation OR n:Lesson OR n:Factor OR n:Tool
+      DETACH DELETE n
+    `);
+  });
+
+  console.log(
+    JSON.stringify({
+      type: "semantic_store_reset",
+      backend: "neo4j",
+      uri: (process.env.NEO4J_URI || "").replace(/\/\/.*@/, "//***@"),
+      path: fallbackPath(),
+    }),
+  );
+}

@@ -11,14 +11,20 @@ import { resolve } from "node:path";
 import { initObservability, shutdownObservability } from "./observability.js";
 import { runOnePlanner, type PlannerRunResult } from "./runPlanner.js";
 import {
-  clearLocalSemanticStore,
+  clearSemanticStore,
   closeSemanticMemory,
   listUsableLessons,
-  semanticFallbackPath,
 } from "./semanticMemory.js";
 import type { ToolCallResult } from "./tools.js";
 
 config({ path: resolve(process.cwd(), ".env") });
+
+/** Deterministic prove path: offline planner + working-memory analyzer. */
+function forceOfflineProveMode(): void {
+  process.env.TENSORMUX_BASE_URL = "";
+  process.env.TENSORMUX_API_KEY = "";
+  process.env.NEATLOGS_API_KEY = "";
+}
 
 type ListOrdersStats = {
   total: number;
@@ -54,20 +60,8 @@ function listOrdersStats(toolCalls: ToolCallResult[]): ListOrdersStats {
 }
 
 async function promoteUsableLesson(): Promise<void> {
-  // Prefer clean local demo path
-  if (
-    !(process.env.NEO4J_URI || "").trim() ||
-    !(process.env.NEO4J_USER || "").trim() ||
-    !(process.env.NEO4J_PASSWORD || "").trim()
-  ) {
-    clearLocalSemanticStore();
-    console.log(
-      JSON.stringify({
-        type: "prove_strategy_reset",
-        store: semanticFallbackPath(),
-      }),
-    );
-  }
+  forceOfflineProveMode();
+  await clearSemanticStore();
 
   // During promotion, disable injection so the teaching signal stays naive.
   process.env.STRATEGY_INJECTION = "0";
@@ -106,6 +100,7 @@ async function promoteUsableLesson(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  forceOfflineProveMode();
   await initObservability();
 
   try {

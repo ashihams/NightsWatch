@@ -16,6 +16,7 @@
     "strategy:prove": "tsx agent/src/proveStrategy.ts",
     "memory:lessons": "tsx agent/src/listLessons.ts",
     "neo4j:lessons": "tsx agent/src/listLessons.ts",
+    "neo4j:probe": "tsx scripts/probe-neo4j.ts",
     "replay:demo": "tsx scripts/replay-demo.ts",
     "dashboard": "tsx dashboard/server.ts",
     "dev:dashboard": "tsx dashboard/server.ts",

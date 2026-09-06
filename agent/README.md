@@ -144,21 +144,27 @@ Stdout pipeline: `analyzer_result` → `reflection_gate` (`flagged`) → `reflec
 | Env | Purpose |
 |-----|---------|
 | `NEO4J_URI` | Bolt / `neo4j+s://…` Aura URI |
-| `NEO4J_USER` | Username (often `neo4j`) |
+| `NEO4J_USER` | Aura username (often the instance id, not always `neo4j`) |
 | `NEO4J_PASSWORD` | Password |
 | `SEMANTIC_FALLBACK_PATH` | Local JSON store when Neo4j unset/unreachable (default `./data/semantic_lessons.json`) |
 
 **Missing / unreachable Neo4j:** log a warning and keep writing candidate lessons to the local fallback — **do not crash** the agent.
 
+```bash
+npm run neo4j:probe      # verify Aura connectivity
+npm run reflection:prove # candidate → promoted on Neo4j (or local fallback)
+npm run memory:lessons   # or: npm run neo4j:lessons
+```
+
 ### Prove two-run promotion
 
 ```bash
-# needs npm run tools on :5678; leave Neo4j blank for local fallback demo
+# needs tools on :5678 (n8n or mock); Neo4j env set → writes to Aura
 npm run reflection:prove
 # → run 1: candidate evidence_count=1 usable=false
 # → run 2: promoted evidence_count>=2 usable=true
 
-npm run memory:lessons   # or: npm run neo4j:lessons
+npm run memory:lessons
 ```
 
 ## Deterministic analyzer (Step 6)
