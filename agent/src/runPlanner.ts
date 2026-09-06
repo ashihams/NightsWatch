@@ -40,7 +40,8 @@ function maxSteps(): number {
  * This is the AO-session entrypoint — wrap later as an AO session; keep the boundary here.
  */
 export async function runOnePlanner(task: string): Promise<PlannerRunResult> {
-  return withSpan({ kind: "AGENT", name: "runOnePlanner" }, async () => {
+  // WORKFLOW root groups LLM + tool spans for one planner invocation
+  return withSpan({ kind: "WORKFLOW", name: "runOnePlanner" }, async () => {
     const mode = tensormuxConfigured() ? "tensormux" : "offline";
     const toolCalls: ToolCallResult[] = [];
     const history: LlmMessage[] = [];

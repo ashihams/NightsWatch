@@ -47,7 +47,7 @@ Init happens once in `src/observability.ts`, called at the very start of `src/in
 |-----|---------|
 | `NEATLOGS_API_KEY` | Project API key from [app.neatlogs.com](https://app.neatlogs.com). Required to export traces. |
 | `NEATLOGS_ENDPOINT` | Optional ingest base URL (default `https://ingest.neatlogs.com`) |
-| `NEATLOGS_WORKFLOW_NAME` | Optional workflow label in the dashboard (default `nights-watch-agent`) |
+| `NEATLOGS_WORKFLOW_NAME` | Optional workflow label in the dashboard (default `support-agent-planner`) |
 
 **Missing key:** stdout shows `[neatlogs] NEATLOGS_API_KEY missing — tracing disabled…` and the agent continues.
 
@@ -62,7 +62,7 @@ Init happens once in `src/observability.ts`, called at the very start of `src/in
 1. Set `NEATLOGS_API_KEY` in `.env` and run `npm run agent` (with `npm run tools` up).
 2. Open [https://app.neatlogs.com](https://app.neatlogs.com).
 3. Open the project that owns your API key.
-4. Filter or search workflows by `nights-watch-agent` (or your `NEATLOGS_WORKFLOW_NAME`).
+4. Filter or search workflows by `support-agent-planner` (or your `NEATLOGS_WORKFLOW_NAME`).
 5. Open the newest trace — you should see the agent root with nested tool (and LLM, on the TensorMux path) spans.
 6. Session grouping follows Neatlogs defaults: a single CLI run is one trace/session unless you set an explicit session id later.
 
