@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "dotenv": "^16.4.7",
+    "neatlogs": "^1.1.19",
     "openai": "^4.86.2"
   },
   "devDependencies": {

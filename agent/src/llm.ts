@@ -5,6 +5,7 @@
 
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import { maybeWrapOpenAI } from "./observability.js";
 import { TOOL_DEFINITIONS } from "./tools.js";
 
 export type LlmMessage = ChatCompletionMessageParam;
@@ -20,10 +21,12 @@ export function tensormuxConfigured(): boolean {
 }
 
 function client(): OpenAI {
-  return new OpenAI({
+  const raw = new OpenAI({
     apiKey: process.env.TENSORMUX_API_KEY!,
     baseURL: process.env.TENSORMUX_BASE_URL!,
   });
+  // wrapOpenAI emits LLM spans when Neatlogs is initialized
+  return maybeWrapOpenAI(raw);
 }
 
 const SYSTEM = `You are a support ops agent with CRM tools.

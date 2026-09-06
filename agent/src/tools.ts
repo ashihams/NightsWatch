@@ -3,6 +3,8 @@
  * Logs every call (name, args, status, latency) to stdout.
  */
 
+import { withSpan } from "./observability.js";
+
 export const TOOL_NAMES = [
   "search_customers",
   "get_customer",
@@ -30,52 +32,56 @@ export async function callTool(
   name: ToolName,
   args: Record<string, unknown> = {},
 ): Promise<ToolCallResult> {
-  const url = `${toolsBaseUrl()}/webhook/${name}`;
-  const started = Date.now();
-  let status = 0;
-  let body: unknown = null;
-  let ok = false;
+  return withSpan({ kind: "TOOL", name: `tool.${name}`, toolName: name }, async () => {
+    const url = `${toolsBaseUrl()}/webhook/${name}`;
+    const started = Date.now();
+    let status = 0;
+    let body: unknown = null;
+    let ok = false;
 
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(args),
-    });
-    status = res.status;
-    const text = await res.text();
     try {
-      body = text ? JSON.parse(text) : null;
-    } catch {
-      body = { raw: text };
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(args),
+      });
+      status = res.status;
+      const text = await res.text();
+      try {
+        body = text ? JSON.parse(text) : null;
+      } catch {
+        body = { raw: text };
+      }
+      ok =
+        res.ok &&
+        !(body && typeof body === "object" && (body as { ok?: boolean }).ok === false);
+    } catch (err) {
+      status = 0;
+      ok = false;
+      body = {
+        ok: false,
+        error: "transport_error",
+        message: err instanceof Error ? err.message : String(err),
+      };
     }
-    ok = res.ok && !(body && typeof body === "object" && (body as { ok?: boolean }).ok === false);
-  } catch (err) {
-    status = 0;
-    ok = false;
-    body = {
-      ok: false,
-      error: "transport_error",
-      message: err instanceof Error ? err.message : String(err),
-    };
-  }
 
-  const latencyMs = Date.now() - started;
-  const result: ToolCallResult = { name, args, status, ok, latencyMs, body };
+    const latencyMs = Date.now() - started;
+    const result: ToolCallResult = { name, args, status, ok, latencyMs, body };
 
-  // Structured stdout log for demos / later AO session capture
-  console.log(
-    JSON.stringify({
-      type: "tool_call",
-      name: result.name,
-      args: result.args,
-      status: result.status,
-      ok: result.ok,
-      latency_ms: result.latencyMs,
-    }),
-  );
+    // Structured stdout log for demos / later AO session capture
+    console.log(
+      JSON.stringify({
+        type: "tool_call",
+        name: result.name,
+        args: result.args,
+        status: result.status,
+        ok: result.ok,
+        latency_ms: result.latencyMs,
+      }),
+    );
 
-  return result;
+    return result;
+  });
 }
 
 /** OpenAI-style function schemas (intentionally light — naive agent won't see deep deps). */
